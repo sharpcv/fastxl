@@ -9,5 +9,6 @@ int run_probe(const Args& args);
 int run_schema(const Args& args);
 int run_preview(const Args& args);
 int run_convert(const Args& args);
+int run_errors(const Args& args);
 
 } // namespace fastxl_cli

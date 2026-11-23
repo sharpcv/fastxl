@@ -53,6 +53,36 @@ All machine-facing payloads start with `{"version":1,"ok":true}`; failures are a
 single JSON object with a stable error code. The contract is described by
 [`docs/probe.schema.json`](docs/probe.schema.json).
 
+## Errors and exit codes
+
+Bare `fastxl-cli` (or `fastxl-cli --help`) prints detailed usage to stdout and
+exits 0; `fastxl-cli <command> --help` documents that command's options,
+defaults and examples. Every failure prints the error code in both modes —
+`error [InvalidUtf8]: ...` on stderr, or `error.code` and `error.exit_code` in
+JSON.
+
+```sh
+fastxl-cli errors          # human-readable exit/error code reference
+fastxl-cli errors --json   # same table as JSON
+```
+
+| Exit | Name | Meaning |
+|---|---|---|
+| 0 | `success` | operation succeeded (including usage/help output) |
+| 1 | `usage` | invalid command line, unknown command or unsupported option |
+| 2 | `input` | input could not be read, parsed or converted |
+| 3 | `output` | output could not be written or atomically replaced |
+| 4 | `internal` | internal state failure, writer misuse or abort |
+
+`UsageError` (exit 1) is emitted by the CLI for bad arguments; the remaining
+codes are library `fastxl::ErrorCode` values and have one-line explanations in
+`fastxl-cli errors`. A failure payload looks like:
+
+```json
+{"version":1,"ok":false,"error":{"code":"FileNotFound",
+ "message":"cannot open /nope","exit_code":2,"command":"info","file":"/nope"}}
+```
+
 ## Documentation
 
 - [`docs/ai.md`](docs/ai.md) — AI contract, CLI/JSON schema, Python binding API.

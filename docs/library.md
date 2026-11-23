@@ -874,11 +874,14 @@ CLI 退出码：
 
 | 码 | 含义 |
 |---|---|
-| 0 | 成功 |
-| 1 | 用法错误 |
+| 0 | 成功（含不带参数和 `--help` 的用法输出） |
+| 1 | 用法错误（`UsageError`：未知命令、参数非法） |
 | 2 | 输入/格式错误（含 `InvalidUtf8`、`MalformedXml`） |
 | 3 | 输出/原子替换错误（`IoError`、`AtomicReplaceFailed`） |
 | 4 | 内部错误（`Internal`、`Closed`、顺序错误等） |
+
+JSON 失败对象包含 `error.code`、`error.message` 和 `error.exit_code`。
+`fastxl-cli errors [--json]` 列出全部错误码、对应的退出码和一行解释。
 
 ---
 
@@ -951,14 +954,19 @@ fastxl-cli convert <in|-> --out <out|-> [--from ...] [--to ...]
                           [--normalize] [--fill-gaps] [--columns 1,3-5]
                           [--limit N] [--crlf] [--bom]
                           [--sheet-name NAME] [--compress-level N]
+fastxl-cli errors [--json]
+fastxl-cli --help
+fastxl-cli <command> --help
 ```
 
 约定：
 
+- `fastxl-cli --help` 打印命令概览，`fastxl-cli <command> --help` 打印该命令的
+  全部选项、默认值和示例；不带任何参数等价于 `--help`，退出码为 0。
 - `--sheet` 接受名称或 1-based 索引；JSON 的 `sheet_index` 是 0-based。
 - `probe/schema/preview` 接受 `-`，但必须用 `--from` 指定格式；stdin 会 spool 到临时文件。
 - 机器可读 JSON 成功时带 `"version":1,"ok":true`；失败时 stderr 为
-  `{"version":1,"ok":false,"error":{"code":...,"message":...}}`。
+  `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。
 - `schema`/`preview` 始终 JSON；`info`/`probe` 需要 `--json`。
 - MCP 包装：`python projects/tools/fastxl_mcp.py --cli <fastxl-cli>`；工具名为
   `fastxl_info`、`fastxl_preview`、`fastxl_schema`、`fastxl_probe`。

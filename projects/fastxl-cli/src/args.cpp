@@ -202,6 +202,7 @@ std::string usage_text() {
       "                          [--infer|--no-infer] [--normalize] [--fill-gaps]\n"
       "                          [--columns 1,3-5] [--limit N] [--crlf] [--bom]\n"
       "                          [--sheet-name NAME] [--compress-level N]\n"
+      "  fastxl-cli errors [--json]                             # exit/error code reference\n"
       "  fastxl-cli --help | --version\n"
       "  --sheet accepts a sheet name or a 1-based index; `info` lists the order.\n";
 }

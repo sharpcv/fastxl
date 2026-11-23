@@ -95,8 +95,31 @@ int exit_code_for(ErrorCode code) {
   case ErrorCode::CellOrderViolation:
   case ErrorCode::SheetOrderViolation:
   case ErrorCode::WorkbookAlreadyStarted:
-  case ErrorCode::Aborted: return 4;
+  case ErrorCode::Aborted:
+  case ErrorCode::Count: return 4;
   default: return 2;
+  }
+}
+
+std::string_view exit_code_name(int code) {
+  switch (code) {
+  case 0: return "success";
+  case 1: return "usage";
+  case 2: return "input";
+  case 3: return "output";
+  case 4: return "internal";
+  default: return "unknown";
+  }
+}
+
+std::string_view exit_code_description(int code) {
+  switch (code) {
+  case 0: return "operation succeeded";
+  case 1: return "invalid command line: bad option, missing value or unknown command";
+  case 2: return "input could not be read, parsed or converted";
+  case 3: return "output could not be written or atomically replaced";
+  case 4: return "internal state failure, writer misuse or aborted operation";
+  default: return "unknown exit code";
   }
 }
 

@@ -38,6 +38,10 @@ fastxl::Format resolve_format(const std::string& explicit_value,
 
 int exit_code_for(fastxl::ErrorCode code);
 
+// Short name ("success", "usage", ...) and one-line meaning for an exit code.
+std::string_view exit_code_name(int code);
+std::string_view exit_code_description(int code);
+
 std::string_view sheet_state_name(fastxl::SheetState state);
 std::string_view sheet_kind_name(fastxl::SheetKind kind);
 

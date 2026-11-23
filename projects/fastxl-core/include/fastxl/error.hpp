@@ -39,7 +39,8 @@ enum class ErrorCode : uint8_t {
   ColumnCountMismatch,
   JsonSchemaMismatch,
   EmptyTable,
-  Internal
+  Internal,
+  Count // sentinel; never thrown
 };
 
 class Exception : public std::runtime_error {
@@ -55,5 +56,9 @@ private:
 
 // Stable machine-readable name for an error code (e.g. "InvalidUtf8").
 std::string_view to_string(ErrorCode code) noexcept;
+
+// One-line human explanation for an error code (e.g. "input is not valid UTF-8").
+// `ErrorCode::Count` returns "internal sentinel; never reported".
+std::string_view to_explanation(ErrorCode code) noexcept;
 
 } // namespace fastxl

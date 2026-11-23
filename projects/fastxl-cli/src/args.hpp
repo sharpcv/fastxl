@@ -44,7 +44,12 @@ struct Args {
 };
 
 Args parse_args(const std::vector<std::string>& argv);
+// Short usage block printed after a usage error.
 std::string usage_text();
+// Detailed global help printed by bare invocation and --help.
+std::string help_text();
+// Detailed help for one command; empty string for an unknown command.
+std::string command_help(const std::string& command);
 
 // "1,3-5" -> {0,2,3,4}; throws UsageError on malformed input.
 std::vector<size_t> parse_column_projection(const std::string& spec);

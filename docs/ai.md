@@ -37,9 +37,29 @@ command fails, stderr is a single JSON object:
 
 ```json
 {"version":1,"ok":false,"error":{"code":"InvalidUtf8",
- "message":"CSV record 2 field 1 is not valid UTF-8","command":"probe",
- "file":"data.csv"}}
+ "message":"CSV record 2 field 1 is not valid UTF-8","exit_code":2,
+ "command":"probe","file":"data.csv"}}
 ```
+
+`error.code` is stable; `error.exit_code` is the process exit code and
+`error.message` is human text. `UsageError` (exit 1) covers bad arguments;
+library failures use `fastxl::ErrorCode` names. `fastxl-cli errors --json`
+returns the full table of exit codes and error codes with one-line
+explanations:
+
+```json
+{"version":1,"ok":true,
+ "exit_codes":[{"code":2,"name":"input","description":"..."}],
+ "error_codes":[{"name":"InvalidUtf8","exit_code":2,"description":"..."}]}
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | success; also bare `fastxl-cli` and `--help` |
+| 1 | usage error (`UsageError`) |
+| 2 | input/format error |
+| 3 | output or atomic-replace error |
+| 4 | internal/state error |
 
 `--header-row auto` locates the header from frozen panes and the first
 text-only row followed by typed values. It never guesses silently: the chosen
