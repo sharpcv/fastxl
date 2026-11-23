@@ -45,16 +45,14 @@ def platform_tag():
     arch = ARCH_ALIASES.get(platform.machine().lower(), platform.machine().lower())
     if sys.platform == "win32":
         return "windows-%s" % {"x86_64": "x64"}.get(arch, arch)
-    if sys.platform == "darwin":
-        return "macos-%s" % arch
     if sys.platform.startswith("linux"):
         return "linux-%s" % arch
-    return "%s-%s" % (sys.platform, arch)
+    raise SystemExit("unsupported platform: %s (only Windows and Linux are supported)" % sys.platform)
 
 
 def native_suffix():
-    # bindings/xmake.lua builds ``_fastxl.so`` on every POSIX platform; CPython
-    # imports a plain ``.so`` on macOS too.
+    # bindings/xmake.lua builds ``_fastxl.so`` on Linux and ``_fastxl.pyd`` on
+    # Windows.
     return ".pyd" if sys.platform == "win32" else ".so"
 
 

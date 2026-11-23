@@ -2,6 +2,6 @@
   "include": ["bindings/python", "skill/scripts"],
   "extraPaths": ["bindings/python"],
   "stubPath": "bindings/python",
-  "pythonVersion": "3.14",
+  "pythonVersion": "3.13",
   "reportMissingModuleSource": false
 }

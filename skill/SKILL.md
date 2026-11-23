@@ -177,10 +177,11 @@ larger table. Do not assume column letters; use the schema names.
 - Legacy `.xls` (CFB) is rejected; convert it with Excel/WPS first.
 - JSONL requires one top-level object per line; nested arrays/objects stay
   compact JSON text.
-- The bundled native module (`_fastxl.pyd` on Windows, `_fastxl.so` on
-  Linux/macOS) matches the platform it was built for. With another interpreter,
-  reads still work through the CLI fallback; `write` and in-process imports need
-  a matching native build (or `FASTXL_CLI` plus `FASTXL_FORCE_CLI=1`).
+- The bundled native module (`_fastxl.pyd` on Windows, `_fastxl.so` on Linux)
+  matches the platform and CPython minor version it was built for. With another
+  interpreter, reads still work through the CLI fallback; `write` and in-process
+  imports need a matching native build (or `FASTXL_CLI` plus
+  `FASTXL_FORCE_CLI=1`).
 
 See `reference/reference.md` (a copy of the project `docs/ai.md`) for payload
 fields, exit codes and error behavior.

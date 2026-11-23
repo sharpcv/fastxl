@@ -52,8 +52,10 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 
 ## 2. 构建与集成
 
-依赖：C++20 编译器、xmake；首次配置需要网络拉取
-minizip-ng（及其 OpenSSL 3 依赖）、zlib、fast_float、simdutf、fmt、nlohmann_json。
+支持平台：Windows x64 与 Linux（x86_64/aarch64），其他平台不在支持范围内。
+
+依赖：C++20 编译器、xmake；首次配置需要网络拉取 minizip-ng（仅 STORE/DEFLATE，
+不启用加密与 OpenSSL）、zlib、fast_float、simdutf、fmt、nlohmann_json。
 
 ```sh
 xmake f -y -m release
@@ -71,10 +73,9 @@ xmake build -y fastxl-tests
 xmake run fastxl-tests
 ```
 
-Linux/BSD/Android 下库内部使用 `std::thread`（`profile` 并行分析与 XLSX 写出），
-编译和最终链接都需要 `-pthread`；仓库内的 xmake 目标已自动添加，自行用
-CMake/手工编译时需显式传入。macOS 的 pthread 由 libSystem 提供，无需额外参数；
-Windows 也不提供 `-pthread` 选项。
+Linux 下库内部使用 `std::thread`（`profile` 并行分析与 XLSX 写出），编译和最终
+链接都需要 `-pthread`；仓库内的 xmake 目标已自动添加，自行用 CMake/手工编译时
+需显式传入。Windows 不需要 `-pthread`。
 
 在自己的 xmake 工程中：
 

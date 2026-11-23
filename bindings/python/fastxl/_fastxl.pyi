@@ -6,6 +6,9 @@ CellValue: TypeAlias = int | float | bool | str | None
 SheetSelector: TypeAlias = str | int | None
 HeaderRow: TypeAlias = int | Literal["auto"]
 
+__version__: str
+__build_python__: tuple[int, int]
+
 class Error(RuntimeError):
     """Stable fastxl error; ``code`` carries the machine-readable code."""
 

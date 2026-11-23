@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build-from-source)
-[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-yellow.svg)](#python-bindings)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-yellow.svg)](#python-bindings)
 
 fastxl streams workbooks instead of materializing them. One `Reader`/`Writer`
 abstraction covers XLSX, CSV and JSONL, with a SAX reader for large sheets and a
@@ -88,8 +88,8 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 - [`docs/ai.md`](docs/ai.md) — AI contract, CLI/JSON schema, Python binding API.
 - [`docs/library.md`](docs/library.md) — C++ library guide.
 - [`docs/limitations.md`](docs/limitations.md) — honest list of what is not supported.
-- [`bindings/README.md`](bindings/README.md) — building the Python module on Windows,
-  Linux and macOS.
+- [`bindings/README.md`](bindings/README.md) — building the Python module on Windows
+  and Linux.
 
 ## Repository layout
 
@@ -103,9 +103,9 @@ projects/   core sources, CLI and tools
 
 ## Build from source
 
-Requires xmake and a C++20 compiler. The first configure fetches minizip-ng,
-zlib, OpenSSL 3 (a minizip-ng dependency), fast_float, simdutf, fmt and
-nlohmann_json.
+Requires xmake and a C++20 compiler on Windows x64 or Linux. The first configure
+fetches minizip-ng (STORE/DEFLATE only, no OpenSSL), zlib, fast_float, simdutf,
+fmt and nlohmann_json.
 
 ```sh
 xmake f -y -m release

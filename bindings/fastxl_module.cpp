@@ -887,6 +887,7 @@ void translate_fastxl_error(std::exception_ptr p) {
 PYBIND11_MODULE(_fastxl, m) {
   m.doc() = "Native fastxl bindings: info, schema, probe, preview, read_rows, write_xlsx";
   m.attr("__version__") = "1.0.0";
+  m.attr("__build_python__") = py::make_tuple(PY_MAJOR_VERSION, PY_MINOR_VERSION);
   py::exception<fastxl::Exception> error(m, "Error", PyExc_RuntimeError);
   error_type = error.ptr();
   py::register_exception_translator(&translate_fastxl_error);
