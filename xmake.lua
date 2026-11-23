@@ -1,5 +1,6 @@
 set_project("fastxl")
-set_version("1.0.0")
+FASTXL_PROJECT_VERSION = "1.0.0"
+set_version(FASTXL_PROJECT_VERSION)
 set_license("MIT")
 set_languages("c++20")
 add_rules("mode.debug", "mode.release")

@@ -22,9 +22,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def read_version():
     text = (ROOT / "xmake.lua").read_text(encoding="utf-8")
-    match = re.search(r'set_version\("([^"]+)"\)', text)
+    match = re.search(r'FASTXL_PROJECT_VERSION\s*=\s*"([^"]+)"', text)
     if not match:
-        raise SystemExit("cannot read set_version from xmake.lua")
+        match = re.search(r'set_version\("([^"]+)"\)', text)
+    if not match:
+        raise SystemExit("cannot read project version from xmake.lua")
     return match.group(1)
 
 

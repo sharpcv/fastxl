@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
   try {
     args = fastxl_cli::parse_args(arguments);
     if (args.version) {
-      fmt::print("fastxl 0.1.0\n");
+      fmt::print("fastxl {}\n", FASTXL_VERSION);
       return 0;
     }
     if (!args.command.empty() && args.help) {
