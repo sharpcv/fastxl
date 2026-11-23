@@ -57,9 +57,18 @@ minizip-ng、zlib、fast_float、simdutf、fmt、nlohmann_json。
 
 ```sh
 xmake f -y -m release
-xmake build -y fastxl-cli fastxl-tests
+xmake build -y fastxl-cli fastxl-python
+```
+
+本地开发树额外带有 `fastxl-tests` 目标（`projects/tests/` 不随仓库发布）：
+
+```sh
+xmake build -y fastxl-tests
 xmake run fastxl-tests
 ```
+
+Linux/BSD 下库内部使用 `std::thread`，最终链接需要 `-pthread`；仓库内的 xmake
+目标已自动添加，自行用 CMake/手工编译时需显式传入。
 
 在自己的 xmake 工程中：
 

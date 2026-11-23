@@ -15,10 +15,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32

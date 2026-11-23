@@ -84,4 +84,8 @@ target("fastxl-python")
     else
         -- minizip-ng was built with OpenSSL support on Linux/macOS.
         add_syslinks("crypto")
+        if is_plat("linux", "bsd", "android") then
+            add_cxflags("-pthread")
+            add_ldflags("-pthread")
+        end
     end

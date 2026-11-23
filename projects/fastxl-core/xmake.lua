@@ -23,4 +23,8 @@ if is_plat("windows") then
     add_cxflags("/W4", "/permissive-")
 else
     add_cxflags("-Wall", "-Wextra", "-Wpedantic", "-fPIC")
+    if is_plat("linux", "bsd", "android") then
+        -- std::thread needs the POSIX thread compile/link contract on older glibc.
+        add_cxflags("-pthread")
+    end
 end

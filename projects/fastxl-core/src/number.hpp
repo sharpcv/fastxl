@@ -30,10 +30,4 @@ inline bool parse_int(std::string_view text, int64_t* out) {
   return true;
 }
 
-// Shortest round-trip representation; `out` must hold at least 32 bytes.
-inline size_t format_double(double value, char* out) {
-  auto result = std::to_chars(out, out + 32, value);
-  return static_cast<size_t>(result.ptr - out);
-}
-
 } // namespace fastxl::detail::text

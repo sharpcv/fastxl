@@ -265,7 +265,7 @@ void infer_cell(std::string_view raw, const ReadOptions& options, CellView& cell
 class CsvTableReader : public Reader {
 public:
   CsvTableReader(InputTarget input, const ReadOptions& options, char delimiter)
-      : options_(options), input_(std::move(input)), delimiter_(delimiter),
+      : options_(options), input_(std::move(input)),
         source_(input_.stream()), records_(source_, delimiter, options.max_field_bytes) {
     initialize_columns();
   }
@@ -384,7 +384,6 @@ private:
 
   ReadOptions options_;
   InputTarget input_;
-  char delimiter_;
   CharSource source_;
   CsvRecordReader records_;
   ParsedRecord record_;
