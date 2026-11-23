@@ -6,8 +6,9 @@ streaming profile code as the C++ CLI.
 
 ## Build
 
-Requirements: CPython 3.13+ x64 headers, `pip install pybind11`, and a release
-xmake configuration (the extension must use the release CPython CRT).
+Requirements: CPython 3.14+ (64-bit) headers — verified with 3.14 on Linux; the
+Windows defaults target 3.15 — `pip install pybind11`, and a release xmake
+configuration (the extension must use the release CPython CRT).
 
 ```sh
 pip install pybind11
@@ -16,22 +17,32 @@ xmake build -y fastxl-python
 ```
 
 Output: `build/python/fastxl/_fastxl.pyd` on Windows, `_fastxl.so` on
-Linux/macOS. `build/` is gitignored; only source and the staged `skill/` package
+Linux/macOS (CPython imports a plain `.so` on macOS; the build never emits
+`.dylib`). `build/` is gitignored; only source and the staged `skill/` package
 are tracked.
+
+Headers are auto-detected from `/usr/include`, `/usr/local/include`, the Homebrew
+prefix and the macOS `Python.framework` locations. If your interpreter lives
+elsewhere, set `FASTXL_PY_INCLUDE` and `FASTXL_PYBIND11_INCLUDE` (both are
+honored on every platform). Release packages are built and verified on Linux and
+Windows; macOS uses the same POSIX code path but is not covered by an automated
+build.
 
 The build reads these environment variables when your Python is elsewhere:
 
 | Variable | Default |
 |---|---|
-| `FASTXL_PY_INCLUDE` | `C:/Apps/py/py3.15/Include`; Linux: first `/usr/include/python3*/Python.h` |
-| `FASTXL_PY_LIBDIR` | `C:/Apps/py/py3.15/libs` (Windows only) |
-| `FASTXL_PY_LIBRARY` | `python315` (Windows only) |
-| `FASTXL_PYBIND11_INCLUDE` | `C:/Apps/py/py3.15/Lib/site-packages/pybind11/include`; Linux: `.venv` or site-packages auto-detected |
+| `FASTXL_PY_INCLUDE` | Windows: `C:/Apps/py/py3.15/Include`; Linux/macOS: first `Python.h` under `/usr/include`, `/usr/local/include`, the Homebrew prefix or `Python.framework` |
+| `FASTXL_PY_LIBDIR` | Windows: `C:/Apps/py/py3.15/libs`. Honored on every platform, not defaulted elsewhere |
+| `FASTXL_PY_LIBRARY` | Windows: `python315`. Honored on every platform, not defaulted elsewhere |
+| `FASTXL_PYBIND11_INCLUDE` | Windows: `C:/Apps/py/py3.15/Lib/site-packages/pybind11/include`; Linux/macOS: `.venv`, system site-packages or Homebrew |
 
 `bindings/xmake.lua` skips the target in debug mode because a debug CRT cannot
-load into a release CPython. On Linux/macOS the extension is not linked against
-`libpython` (the interpreter provides the symbols); minizip's OpenSSL
-dependency is linked as `crypto`.
+load into a release CPython. Windows links `python315` (or `FASTXL_PY_LIBRARY`);
+on Linux/macOS the extension is not linked against `libpython` — the interpreter
+provides the symbols, and macOS links with `-undefined dynamic_lookup` so the
+module resolves them at import time. minizip's OpenSSL dependency is linked as
+`crypto`; xmake fetches and builds OpenSSL 3, so no system OpenSSL is required.
 
 ## Use
 

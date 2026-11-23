@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build-from-source)
-[![Python 3.15](https://img.shields.io/badge/python-3.15-yellow.svg)](#python-bindings)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-yellow.svg)](#python-bindings)
 
 fastxl streams workbooks instead of materializing them. One `Reader`/`Writer`
 abstraction covers XLSX, CSV and JSONL, with a SAX reader for large sheets and a
@@ -104,12 +104,18 @@ projects/   core sources, CLI and tools
 ## Build from source
 
 Requires xmake and a C++20 compiler. The first configure fetches minizip-ng,
-zlib, fast_float, simdutf, fmt and nlohmann_json.
+zlib, OpenSSL 3 (a minizip-ng dependency), fast_float, simdutf, fmt and
+nlohmann_json.
 
 ```sh
 xmake f -y -m release
 xmake build -y fastxl-cli fastxl-python
 ```
+
+On Windows use `xmake f -y -m release -p windows -a x64`. The Python module is
+skipped in debug mode (it must use the release CPython CRT) and needs local
+CPython headers; see [`bindings/README.md`](bindings/README.md) for the
+`FASTXL_PY_*` overrides.
 
 `projects/tests/` and `projects/bench/` are local development directories and
 are not tracked by git. If present locally, `xmake build -y fastxl-tests

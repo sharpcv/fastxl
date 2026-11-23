@@ -37,7 +37,6 @@ def main():
     pyd = first_existing(
         ROOT / "build" / "python" / "fastxl" / "_fastxl.pyd",
         ROOT / "build" / "python" / "fastxl" / "_fastxl.so",
-        ROOT / "build" / "python" / "fastxl" / "_fastxl.dylib",
     )
     init = ROOT / "bindings" / "python" / "fastxl" / "__init__.py"
     pyi = ROOT / "bindings" / "python" / "fastxl" / "_fastxl.pyi"

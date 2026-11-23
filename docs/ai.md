@@ -180,7 +180,7 @@ is authored at `skill/` in this repository and documented in
 uses only the Python standard library and shells out to `fastxl-cli`:
 
 ```sh
-python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli.exe
+python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli   # .exe on Windows
 ```
 
 Tools: `fastxl_info`, `fastxl_preview`, `fastxl_schema`, `fastxl_probe`. Tool

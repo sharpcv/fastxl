@@ -27,7 +27,12 @@ if is_plat("windows") then
 else
     if not py_include then
         local header = first_file("/usr/include/python3*/Python.h") or
-                       first_file("/usr/local/include/python3*/Python.h")
+                       first_file("/usr/local/include/python3*/Python.h") or
+                       first_file("/opt/homebrew/include/python3*/Python.h") or
+                       first_file("/opt/homebrew/opt/python@*/include/python3*/Python.h") or
+                       first_file("/Library/Frameworks/Python.framework/Versions/*/Headers/Python.h") or
+                       first_file("/opt/homebrew/Frameworks/Python.framework/Versions/*/Headers/Python.h") or
+                       first_file("/opt/homebrew/opt/python@*/Frameworks/Python.framework/Versions/*/Headers/Python.h")
         if header then
             py_include = path.directory(header)
         end
@@ -37,7 +42,10 @@ else
                                       "/.venv/lib/python3*/site-packages/pybind11/include/pybind11/pybind11.h") or
                        first_file("/usr/lib/python3*/site-packages/pybind11/include/pybind11/pybind11.h") or
                        first_file("/usr/local/lib/python3*/site-packages/pybind11/include/pybind11/pybind11.h") or
-                       first_file("/usr/include/pybind11/pybind11.h")
+                       first_file("/usr/include/pybind11/pybind11.h") or
+                       first_file("/opt/homebrew/lib/python3*/site-packages/pybind11/include/pybind11/pybind11.h") or
+                       first_file("/opt/homebrew/include/pybind11/pybind11.h") or
+                       first_file("/Library/Frameworks/Python.framework/Versions/*/lib/python3*/site-packages/pybind11/include/pybind11/pybind11.h")
         if header then
             pybind_include = path.directory(path.directory(header))
         end
@@ -87,5 +95,8 @@ target("fastxl-python")
         if is_plat("linux", "bsd", "android") then
             add_cxflags("-pthread")
             add_ldflags("-pthread")
+        elseif is_plat("macosx") then
+            -- The extension resolves libpython symbols from the interpreter.
+            add_ldflags("-undefined", "dynamic_lookup")
         end
     end

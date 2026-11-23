@@ -5,10 +5,12 @@ Exposes read-only spreadsheet probes as MCP tools:
     fastxl_info, fastxl_preview, fastxl_schema, fastxl_probe
 
 Usage:
-    python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli.exe
+    python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli
 
-If --cli is omitted, FASTXL_CLI is used, then build/bin and other build paths, then
-PATH. The server speaks newline-delimited JSON-RPC 2.0 on stdin/stdout;
+(``fastxl-cli.exe`` on Windows.)
+
+If --cli is omitted, FASTXL_CLI is used, then build/bin, then PATH. The server
+speaks newline-delimited JSON-RPC 2.0 on stdin/stdout;
 diagnostics go to stderr.
 """
 
@@ -33,10 +35,6 @@ def find_cli(explicit):
     for candidate in (
         ROOT / "build" / "bin" / "fastxl-cli.exe",
         ROOT / "build" / "bin" / "fastxl-cli",
-        ROOT / "build" / "windows" / "x64" / "release" / "fastxl-cli.exe",
-        ROOT / "build" / "windows" / "x64" / "debug" / "fastxl-cli.exe",
-        ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl-cli",
-        ROOT / "build" / "linux" / "x86_64" / "debug" / "fastxl-cli",
     ):
         if candidate.exists():
             return candidate

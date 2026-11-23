@@ -12,6 +12,7 @@ package, the skill package, README and LICENSE. Intermediate link files
 """
 
 import argparse
+import platform
 import re
 import sys
 import zipfile
@@ -36,20 +37,25 @@ def add_file(zf, source, arcname):
     zf.write(source, arcname)
 
 
+ARCH_ALIASES = {"amd64": "x86_64", "aarch64": "arm64"}
+
+
 def platform_tag():
+    # The build is single-architecture, so the tag must carry that architecture.
+    arch = ARCH_ALIASES.get(platform.machine().lower(), platform.machine().lower())
     if sys.platform == "win32":
-        return "windows-x64"
+        return "windows-%s" % {"x86_64": "x64"}.get(arch, arch)
     if sys.platform == "darwin":
-        return "macos-universal"
-    return "linux-x86_64"
+        return "macos-%s" % arch
+    if sys.platform.startswith("linux"):
+        return "linux-%s" % arch
+    return "%s-%s" % (sys.platform, arch)
 
 
 def native_suffix():
-    if sys.platform == "win32":
-        return ".pyd"
-    if sys.platform == "darwin":
-        return ".dylib"
-    return ".so"
+    # bindings/xmake.lua builds ``_fastxl.so`` on every POSIX platform; CPython
+    # imports a plain ``.so`` on macOS too.
+    return ".pyd" if sys.platform == "win32" else ".so"
 
 
 def main():

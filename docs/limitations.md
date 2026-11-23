@@ -157,7 +157,7 @@ bytes, long paths and streamed xlsx.
   drive (`root_name`) when both are present; other volume mismatches surface as
   `AtomicReplaceFailed` rather than at creation. Atomic replace preserves the
   existing target's permission bits; new files are published as 0644 on POSIX.
-- **Long paths (Windows)**: absolute paths longer than 240 characters are
+- **Long paths (Windows)**: absolute paths of 240 characters or more are
   prefixed with `\\?\` by the library before opening/creating files; relative
   long paths are resolved to absolute first. Deep directory *creation* in your
   own code still needs long-path support.
