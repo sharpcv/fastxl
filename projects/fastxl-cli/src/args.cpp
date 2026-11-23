@@ -75,15 +75,20 @@ Args parse_args(const std::vector<std::string>& argv) {
     if (name == "--json") {
       args.format = OutputFormat::Jsonl;
     } else if (name == "--format") {
-      const std::string value = take_value();
-      if (value == "text") {
+      std::string selected = "text";
+      if (has_value) {
+        if (!value.empty()) selected = value;
+      } else if (index + 1 < argv.size() && !is_option(argv[index + 1])) {
+        selected = argv[++index];
+      }
+      if (selected == "text") {
         args.format = OutputFormat::Text;
-      } else if (value == "table") {
+      } else if (selected == "table") {
         args.format = OutputFormat::Table;
-      } else if (value == "jsonl" || value == "json") {
+      } else if (selected == "jsonl" || selected == "json") {
         args.format = OutputFormat::Jsonl;
       } else {
-        throw UsageError("--format must be text, table or jsonl: " + value);
+        throw UsageError("--format must be text, table or jsonl: " + selected);
       }
     } else if (name == "--no-header") {
       args.header_row = 0;
@@ -217,7 +222,8 @@ std::string usage_text() {
       "                          [--sheet-name NAME] [--compress-level N]\n"
       "  fastxl-cli errors [--format text|table|jsonl]          # exit/error code reference\n"
       "  fastxl-cli --help | --version\n"
-      "  --format is text (default), table or jsonl; --json is an alias for jsonl.\n"
+      "  --format [text|table|jsonl]: text is the default, even when omitted;\n"
+      "  --json is an alias for jsonl.\n"
       "  --sheet accepts a sheet name or a 1-based index; `info` lists the order.\n";
 }
 

@@ -24,7 +24,7 @@ fastxl-cli schema book.xlsx --format jsonl [--sheet Data] [--header-row auto] [-
 
 The CLI is human-readable by default (`text`, which is an aligned table for
 `schema`/`preview`). `--format table` forces the table layout; `--format jsonl`
-(alias `--json`) emits the JSON contract below.
+(alias `--json`) emits the JSON contract below; a bare `--format` means `text`.
 
 `preview` is the cheapest way to understand a sheet's shape: it returns the
 rows as written, each cell carrying `ref`, `col`, `type` and canonical text,

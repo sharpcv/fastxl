@@ -39,8 +39,8 @@ build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 `--format` picks the output style: `text` (default — key/value for `info` and
 `probe`, an aligned table for `schema` and `preview`), `table` (forces the
 aligned table on every report), or `jsonl` (the machine contract; `--json` is an
-alias). Human output truncates long cells with `…` and caps wide tables, so use
-`--format jsonl` for scripts.
+alias). A bare `--format` with no value also means `text`. Human output truncates
+long cells with `…` and caps wide tables, so use `--format jsonl` for scripts.
 
 `fastxl-cli --version` also lists the versions of the linked libraries
 (minizip-ng, zlib-ng, fast_float, simdutf, fmt, nlohmann_json).

@@ -985,9 +985,9 @@ fastxl-cli <command> --help
 - `--version` 输出 fastxl 版本与依赖库版本：minizip-ng、zlib-ng、fast_float、
   simdutf、fmt、nlohmann_json。
 - `probe/schema/preview` 接受 `-`，但必须用 `--from` 指定格式；stdin 会 spool 到临时文件。
-- 输出格式：`--format text|table|jsonl`，默认 `text`。`text` 在 `info`/`probe` 下是
-  键值报告，在 `schema`/`preview` 下是对齐表格；`table` 强制表格；`jsonl`
-  （`--json` 同义）输出机器 JSON。
+- 输出格式：`--format text|table|jsonl`，默认 `text`（省略取值时同样按 `text`）。
+  `text` 在 `info`/`probe` 下是键值报告，在 `schema`/`preview` 下是对齐表格；
+  `table` 强制表格；`jsonl`（`--json` 同义）输出机器 JSON。
 - 以 `--format jsonl` 运行时，成功输出带 `"version":1,"ok":true`；失败时 stderr 为
   `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。
 - 人读表格会把过长单元格截断为 `…`，`preview` 默认最多显示 12 列；脚本请用
