@@ -3,7 +3,9 @@
 #include <string_view>
 
 #include <fmt/format.h>
+#include <minizip/mz.h>
 #include <nlohmann/json.hpp>
+#include <zlib.h>
 
 #include "args.hpp"
 #include "commands.hpp"
@@ -14,6 +16,14 @@
 namespace {
 
 using Json = nlohmann::ordered_json;
+
+std::string_view zlib_engine() {
+#ifdef ZLIBNG_VERSION
+  return "zlib-ng " ZLIBNG_VERSION;
+#else
+  return "zlib " ZLIB_VERSION;
+#endif
+}
 
 bool wants_json(const fastxl_cli::Args& args) {
   return args.json || args.command == "schema" || args.command == "preview";
@@ -52,6 +62,10 @@ int main(int argc, char** argv) {
     args = fastxl_cli::parse_args(arguments);
     if (args.version) {
       fmt::print("fastxl {}\n", FASTXL_VERSION);
+      fmt::print("  zip: minizip-ng {} + {} (zlib API {})\n", MZ_VERSION,
+                 zlib_engine(), zlibVersion());
+      fmt::print("  built without: OpenSSL, ZipCrypto, WinZip AES, signing, "
+                 "bzip2, lzma, zstd, Apple compression\n");
       return 0;
     }
     if (!args.command.empty() && args.help) {

@@ -43,9 +43,9 @@ The build reads these environment variables when your Python is elsewhere:
 `bindings/xmake.lua` skips the target in debug mode because a debug CRT cannot
 load into a release CPython. Windows links `python315` (or `FASTXL_PY_LIBRARY`);
 on Linux the extension is not linked against `libpython` — the interpreter
-provides the symbols at import time. ZIP support is STORE/DEFLATE only, so the
-build has no OpenSSL/libssl/libcrypto dependency; encrypted ZIP entries are
-rejected.
+provides the symbols at import time. ZIP support is STORE/DEFLATE only
+(minizip-ng built against zlib-ng), so the build has no
+OpenSSL/libssl/libcrypto dependency; encrypted ZIP entries are rejected.
 
 ## Use
 

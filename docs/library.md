@@ -55,7 +55,7 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 支持平台：Windows x64 与 Linux（x86_64/aarch64），其他平台不在支持范围内。
 
 依赖：C++20 编译器、xmake；首次配置需要网络拉取 minizip-ng（仅 STORE/DEFLATE，
-不启用加密与 OpenSSL）、zlib、fast_float、simdutf、fmt、nlohmann_json。
+加密与签名关闭，链接 zlib-ng）与 zlib-ng、fast_float、simdutf、fmt、nlohmann_json。
 
 ```sh
 xmake f -y -m release
@@ -971,6 +971,7 @@ fastxl-cli convert <in|-> --out <out|-> [--from ...] [--to ...]
                           [--limit N] [--crlf] [--bom]
                           [--sheet-name NAME] [--compress-level N]
 fastxl-cli errors [--json]
+fastxl-cli --version
 fastxl-cli --help
 fastxl-cli <command> --help
 ```
@@ -980,6 +981,7 @@ fastxl-cli <command> --help
 - `fastxl-cli --help` 打印命令概览，`fastxl-cli <command> --help` 打印该命令的
   全部选项、默认值和示例；不带任何参数等价于 `--help`，退出码为 0。
 - `--sheet` 接受名称或 1-based 索引；JSON 的 `sheet_index` 是 0-based。
+- `--version` 输出 fastxl 版本、ZIP 栈（minizip-ng + zlib-ng）和编译时关闭的后端。
 - `probe/schema/preview` 接受 `-`，但必须用 `--from` 指定格式；stdin 会 spool 到临时文件。
 - 机器可读 JSON 成功时带 `"version":1,"ok":true`；失败时 stderr 为
   `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。

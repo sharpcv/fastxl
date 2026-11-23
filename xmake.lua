@@ -5,20 +5,21 @@ set_license("MIT")
 set_languages("c++20")
 add_rules("mode.debug", "mode.release")
 
--- fastxl only reads/writes STORE and DEFLATE ZIP entries; encrypted ZIPs are
--- rejected. Building minizip-ng with OpenSSL would pull libssl/libcrypto into
--- every binary for features the library never calls, so use a local package
--- definition that turns encryption off. Keep it on the same upstream version.
-package("minizip-ng-lite")
+-- fastxl only reads/writes STORE and DEFLATE ZIP entries; encrypted or signed
+-- ZIPs are rejected. Override the repo package so minizip-ng is rebuilt against
+-- zlib-ng with every unused compression and encryption backend compiled out.
+-- This keeps OpenSSL/libssl/libcrypto out of the build.
+package("minizip-ng")
     set_homepage("https://github.com/zlib-ng/minizip-ng")
-    set_description("minizip-ng trimmed to STORE + DEFLATE (no encryption, no OpenSSL).")
+    set_description("Zip manipulation library (fastxl build: STORE + DEFLATE via zlib-ng).")
     set_license("zlib")
 
     add_urls("https://github.com/zlib-ng/minizip-ng/archive/refs/tags/$(version).tar.gz",
              "https://github.com/zlib-ng/minizip-ng.git")
     add_versions("4.2.2", "71af7b9799856d8b03619df3949e9c1be9703f8de0795af71399ba283cb27aac")
 
-    add_deps("cmake", "zlib")
+    add_deps("cmake")
+    add_deps("zlib-ng", {configs = {zlib_compat = true}})
     if is_plat("windows") then
         add_syslinks("crypt32", "advapi32", "bcrypt")
     end
@@ -27,26 +28,63 @@ package("minizip-ng-lite")
         local configs = {
             "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"),
             "-DBUILD_SHARED_LIBS=OFF",
-            "-DMZ_LIBCOMP=OFF",
-            "-DMZ_FETCH_LIBS=OFF",
-            "-DMZ_PPMD=OFF",
             "-DMZ_ZLIB=ON",
+            "-DMZ_ZLIB_FLAVOR=zlib",
             "-DMZ_BZIP2=OFF",
             "-DMZ_LZMA=OFF",
             "-DMZ_ZSTD=OFF",
+            "-DMZ_PPMD=OFF",
+            "-DMZ_LIBCOMP=OFF",
             "-DMZ_OPENSSL=OFF",
             "-DMZ_PKCRYPT=OFF",
             "-DMZ_WZAES=OFF",
+            "-DMZ_FETCH_LIBS=OFF",
+            "-DMZ_FORCE_FETCH_LIBS=OFF",
         }
         import("package.tools.cmake").install(package, configs)
     end)
 
     on_test(function (package)
-        assert(package:has_cfuncs("mz_zip_open", {includes = "minizip/mz_zip.h"}))
+        assert(package:has_cincludes({"minizip/mz.h", "minizip/mz_zip.h"}))
     end)
 package_end()
 
-add_requires("minizip-ng-lite 4.2.2")
+-- minizip-ng 4.2.2 links the CMake `ZLIB` target and zlib-ng 2.3.x only exports
+-- `zlib-ng::zlib`, so build zlib-ng with its zlib-compatible API by default and
+-- let find_package(ZLIB) resolve it from the package prefix.
+package("zlib-ng")
+    set_homepage("https://github.com/zlib-ng/zlib-ng")
+    set_description("zlib replacement with optimizations for next generation systems.")
+    set_license("zlib")
+
+    add_urls("https://github.com/zlib-ng/zlib-ng/archive/refs/tags/$(version).tar.gz",
+             "https://github.com/zlib-ng/zlib-ng.git")
+    add_versions("2.3.3", "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1")
+
+    add_configs("zlib_compat", {description = "Install the zlib-compatible API", default = true, type = "boolean"})
+    add_deps("cmake")
+
+    on_install(function (package)
+        local configs = {
+            "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"),
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DZLIB_ENABLE_TESTS=OFF",
+            "-DZLIBNG_ENABLE_TESTS=OFF",
+            "-DWITH_GTEST=OFF",
+            "-DINC_INSTALL_DIR=" .. package:installdir("include"),
+            "-DLIB_INSTALL_DIR=" .. package:installdir("lib"),
+            "-DZLIB_COMPAT=" .. (package:config("zlib_compat") and "ON" or "OFF"),
+        }
+        import("package.tools.cmake").install(package, configs)
+    end)
+
+    on_test(function (package)
+        assert(package:has_cincludes("zlib.h"))
+    end)
+package_end()
+
+add_requires("minizip-ng 4.2.2")
+add_requires("zlib-ng 2.3.3")
 add_requires("fast_float 8.3.3")
 add_requires("simdutf 8.2.0")
 add_requires("fmt 12.2.1")

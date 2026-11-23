@@ -36,6 +36,9 @@ build/bin/fastxl-cli preview book.xlsx --rows 20
 build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 ```
 
+`fastxl-cli --version` also lists the linked ZIP stack (minizip-ng + zlib-ng)
+and the backends compiled out.
+
 Python:
 
 ```python
@@ -104,8 +107,8 @@ projects/   core sources, CLI and tools
 ## Build from source
 
 Requires xmake and a C++20 compiler on Windows x64 or Linux. The first configure
-fetches minizip-ng (STORE/DEFLATE only, no OpenSSL), zlib, fast_float, simdutf,
-fmt and nlohmann_json.
+fetches minizip-ng and zlib-ng (ZIP STORE/DEFLATE only, encryption and signing
+off), fast_float, simdutf, fmt and nlohmann_json.
 
 ```sh
 xmake f -y -m release

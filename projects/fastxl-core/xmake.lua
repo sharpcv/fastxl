@@ -17,7 +17,7 @@ else
 end
 add_includedirs("include", {public = true})
 add_includedirs("src")
-add_packages("minizip-ng-lite", "fast_float", "simdutf", "fmt", "nlohmann_json", {public = true})
+add_packages("minizip-ng", "fast_float", "simdutf", "fmt", "nlohmann_json", {public = true})
 add_headerfiles("include/(fastxl/*.hpp)")
 if is_plat("windows") then
     add_cxflags("/W4", "/permissive-")
