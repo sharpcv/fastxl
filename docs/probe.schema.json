@@ -1,0 +1,663 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fastxl.local/probe-v1.schema.json",
+  "title": "fastxl machine-facing JSON, version 1",
+  "description": "Success and error payloads emitted by info, probe, schema and preview. Objects are intentionally open: new optional fields may be added within version 1.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Error"
+    },
+    {
+      "$ref": "#/$defs/Info"
+    },
+    {
+      "$ref": "#/$defs/Probe"
+    },
+    {
+      "$ref": "#/$defs/Schema"
+    },
+    {
+      "$ref": "#/$defs/Preview"
+    }
+  ],
+  "$defs": {
+    "Version": {
+      "const": 1
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "version",
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/Version"
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "SheetInfo": {
+      "type": "object",
+      "required": [
+        "index",
+        "name",
+        "kind",
+        "state"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sheet_id": {
+          "type": "integer"
+        },
+        "rel_id": {
+          "type": "string"
+        },
+        "part": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "worksheet",
+            "chartsheet"
+          ]
+        },
+        "state": {
+          "enum": [
+            "visible",
+            "hidden",
+            "very_hidden"
+          ]
+        },
+        "uncompressed_bytes": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "Info": {
+      "type": "object",
+      "required": [
+        "version",
+        "ok",
+        "file",
+        "size_bytes",
+        "sheets"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/Version"
+        },
+        "ok": {
+          "const": true
+        },
+        "file": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "date1904": {
+          "type": "boolean"
+        },
+        "shared_strings": {
+          "type": "integer"
+        },
+        "sheets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SheetInfo"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Numeric": {
+      "type": "object",
+      "properties": {
+        "any": {
+          "type": "boolean"
+        },
+        "integers": {
+          "type": "integer"
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sum": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "non_finite": {
+          "type": "integer"
+        },
+        "int_min": {
+          "type": "integer"
+        },
+        "int_max": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ValueCount": {
+      "type": "object",
+      "required": [
+        "value",
+        "count"
+      ],
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Column": {
+      "type": "object",
+      "required": [
+        "index"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "original_name": {
+          "type": "string"
+        },
+        "header": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "null",
+            "integer",
+            "number",
+            "text",
+            "boolean",
+            "error",
+            "date",
+            "datetime",
+            "time",
+            "mixed",
+            "invalid"
+          ]
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "non_null": {
+          "type": "integer"
+        },
+        "nulls": {
+          "type": "integer"
+        },
+        "distinct": {
+          "type": "integer"
+        },
+        "distinct_capped": {
+          "type": "boolean"
+        },
+        "numeric": {
+          "$ref": "#/$defs/Numeric"
+        },
+        "text": {
+          "type": "object"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sample_truncated": {
+          "type": "boolean"
+        },
+        "top_values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValueCount"
+          }
+        },
+        "enum_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "SheetMeta": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "visible",
+            "hidden",
+            "very_hidden"
+          ]
+        },
+        "header_row": {
+          "type": "integer"
+        },
+        "header_rows": {
+          "type": "integer"
+        },
+        "rows_scanned": {
+          "type": "integer"
+        },
+        "data_rows": {
+          "type": "integer"
+        },
+        "max_row": {
+          "type": "integer"
+        },
+        "max_col": {
+          "type": "integer"
+        },
+        "empty_rows": {
+          "type": "integer"
+        },
+        "ragged_rows": {
+          "type": "integer"
+        },
+        "merged_ranges": {
+          "type": "integer"
+        },
+        "error_cells": {
+          "type": "integer"
+        },
+        "has_formulas": {
+          "type": "boolean"
+        },
+        "parallel": {
+          "type": "boolean"
+        },
+        "used_range": {
+          "type": "string"
+        },
+        "auto_filter": {
+          "type": "string"
+        },
+        "pane_top_row": {
+          "type": "integer"
+        },
+        "hidden_columns": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Probe": {
+      "type": "object",
+      "required": [
+        "version",
+        "ok",
+        "sheet_name",
+        "columns"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/Version"
+        },
+        "ok": {
+          "const": true
+        },
+        "file": {
+          "type": "string"
+        },
+        "sheet_name": {
+          "type": "string"
+        },
+        "sheet_index": {
+          "type": "integer"
+        },
+        "header_row": {
+          "type": "integer"
+        },
+        "header_rows": {
+          "type": "integer"
+        },
+        "header_auto": {
+          "type": "boolean"
+        },
+        "rows_scanned": {
+          "type": "integer"
+        },
+        "data_rows": {
+          "type": "integer"
+        },
+        "max_row": {
+          "type": "integer"
+        },
+        "max_col": {
+          "type": "integer"
+        },
+        "empty_rows": {
+          "type": "integer"
+        },
+        "ragged_rows": {
+          "type": "integer"
+        },
+        "merged_ranges": {
+          "type": "integer"
+        },
+        "error_cells": {
+          "type": "integer"
+        },
+        "has_formulas": {
+          "type": "boolean"
+        },
+        "parallel": {
+          "type": "boolean"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Schema": {
+      "type": "object",
+      "required": [
+        "version",
+        "ok",
+        "file",
+        "format",
+        "sheets"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/Version"
+        },
+        "ok": {
+          "const": true
+        },
+        "file": {
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "xlsx",
+            "csv",
+            "jsonl"
+          ]
+        },
+        "header_auto": {
+          "type": "boolean"
+        },
+        "sheets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SheetMeta"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "PreviewCell": {
+      "type": "object",
+      "required": [
+        "col",
+        "letter",
+        "ref",
+        "type",
+        "text"
+      ],
+      "properties": {
+        "col": {
+          "type": "integer"
+        },
+        "letter": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "formula": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PreviewRow": {
+      "type": "object",
+      "required": [
+        "number",
+        "cells"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer"
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewCell"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HeaderCandidate": {
+      "type": "object",
+      "required": [
+        "row",
+        "score"
+      ],
+      "properties": {
+        "row": {
+          "type": "integer"
+        },
+        "score": {
+          "type": "number"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Preview": {
+      "type": "object",
+      "required": [
+        "version",
+        "ok",
+        "file",
+        "sheet",
+        "columns",
+        "rows"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/Version"
+        },
+        "ok": {
+          "const": true
+        },
+        "file": {
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "xlsx",
+            "csv",
+            "jsonl"
+          ]
+        },
+        "sheet": {
+          "type": "object"
+        },
+        "used_range": {
+          "type": "string"
+        },
+        "auto_filter": {
+          "type": "string"
+        },
+        "pane_top_row": {
+          "type": "integer"
+        },
+        "hidden_columns": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "range": {
+          "type": "object"
+        },
+        "header_auto": {
+          "type": "boolean"
+        },
+        "header_row": {
+          "type": "integer"
+        },
+        "header_candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderCandidate"
+          }
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewColumn"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PreviewColumn": {
+      "type": "object",
+      "required": [
+        "index",
+        "letter",
+        "name"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "letter": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

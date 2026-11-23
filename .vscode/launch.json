@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run fastxl-cli info (MSVC)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/fastxl-cli.exe",
+      "args": ["info", "${workspaceFolder}/projects/tests/fixtures/basic.xlsx", "--json"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "xmake: build fastxl-cli (debug)"
+    }
+  ]
+}

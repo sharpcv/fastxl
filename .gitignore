@@ -1,0 +1,28 @@
+# Local build output and tool caches
+build/
+.xmake/
+.cache/
+.vscode/.cache/
+.vscode/compile_commands.json
+compile_commands.json
+
+# Python caches and link intermediates
+__pycache__/
+*.pyc
+*.exp
+
+# Local development tests and benchmarks are not shipped
+projects/tests/
+projects/bench/
+
+# Python extension link intermediates
+bindings/python/fastxl/_fastxl.lib
+
+# Staged skill artifacts are produced by projects/tools/stage_skill.py
+skill/bin/*
+skill/python/fastxl/_fastxl.*
+!skill/python/fastxl/__init__.py
+skill/reference/*
+!skill/reference/.gitkeep
+
+skill/python/fastxl/py.typed

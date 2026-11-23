@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "xmake: configure debug",
+      "type": "shell",
+      "command": "xmake",
+      "args": ["f", "-p", "windows", "-a", "x64", "-m", "debug", "-y"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "xmake: build fastxl-cli (debug)",
+      "type": "shell",
+      "command": "xmake",
+      "args": ["build", "-y", "fastxl-cli"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "xmake: configure debug",
+      "problemMatcher": ["$msCompile"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

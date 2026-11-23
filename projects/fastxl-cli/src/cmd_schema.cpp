@@ -1,0 +1,225 @@
+#include "commands.hpp"
+
+#include <array>
+#include <cmath>
+#include <filesystem>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <fmt/format.h>
+#include <nlohmann/json.hpp>
+
+#include "common.hpp"
+#include "fastxl/fastxl.hpp"
+#include "headers.hpp"
+
+namespace fastxl_cli {
+
+using namespace fastxl;
+using Json = nlohmann::ordered_json;
+
+namespace {
+
+Json number_or_null(double value) {
+  if (!std::isfinite(value)) return nullptr;
+  return value;
+}
+
+std::string column_name(const Column& column) {
+  if (!column.header.empty()) return column.header;
+  return "column_" + std::to_string(column.index);
+}
+
+std::string infer_column_type(const Column& column) {
+  size_t buckets = 0;
+  int which = -1;
+  for (size_t i = 0; i < column.type_counts.size(); ++i) {
+    if (i == static_cast<size_t>(CellType::Invalid)) continue;
+    if (column.type_counts[i] != 0) {
+      ++buckets;
+      which = static_cast<int>(i);
+    }
+  }
+  if (column.non_null == 0) return "null";
+  if (buckets == 0) return "invalid";
+  if (buckets > 1) return "mixed";
+  switch (static_cast<CellType>(which)) {
+  case CellType::Number:
+    return column.numeric.integers == column.non_null ? "integer" : "number";
+  case CellType::SharedString:
+  case CellType::Text: return "text";
+  case CellType::Boolean: return "boolean";
+  case CellType::Error: return "error";
+  case CellType::Date: return "date";
+  case CellType::DateTime: return "datetime";
+  case CellType::Time: return "time";
+  case CellType::Invalid: return "invalid";
+  case CellType::Int: return "integer";
+  case CellType::Null: return "null";
+  }
+  return "invalid";
+}
+
+Json column_json(const Column& column, const std::string& name,
+                 const std::string& original_name) {
+  Json entry;
+  entry["index"] = column.index;
+  entry["name"] = name;
+  if (name != original_name) entry["original_name"] = original_name;
+  entry["type"] = infer_column_type(column);
+  entry["nullable"] = column.nulls > 0;
+  entry["non_null"] = column.non_null;
+  entry["nulls"] = column.nulls;
+  entry["distinct"] = column.distinct;
+  entry["distinct_capped"] = column.distinct_capped;
+  Json numeric;
+  numeric["any"] = column.numeric.any;
+  numeric["integers"] = column.numeric.integers;
+  numeric["min"] = number_or_null(column.numeric.min);
+  numeric["max"] = number_or_null(column.numeric.max);
+  numeric["mean"] = number_or_null(column.numeric.mean);
+  numeric["sum"] = number_or_null(column.numeric.sum);
+  numeric["non_finite"] = column.numeric.non_finite;
+  numeric["integers"] = column.numeric.integers;
+  if (column.numeric.int_any) {
+    numeric["int_min"] = column.numeric.int_min;
+    numeric["int_max"] = column.numeric.int_max;
+  }
+  entry["numeric"] = std::move(numeric);
+  Json text;
+  text["min_len"] = column.min_text_len;
+  text["max_len"] = column.max_text_len;
+  entry["text"] = std::move(text);
+  entry["samples"] = column.samples;
+  entry["sample_truncated"] = column.sample_truncated;
+  Json top = Json::array();
+  for (const ValueCount& value : column.top_values)
+    top.push_back({{"value", value.value}, {"count", value.count}});
+  entry["top_values"] = std::move(top);
+  entry["enum_values"] = column.enum_values;
+  entry["flags"] = column.flags;
+  return entry;
+}
+
+Json section_json(const std::string& name, uint32_t index, std::string_view state,
+                  const SheetProfile& profile) {
+  Json section;
+  section["name"] = name;
+  section["index"] = index;
+  if (!state.empty()) section["state"] = state;
+  section["header_row"] = profile.header_row;
+  section["header_rows"] = profile.header_rows;
+  section["rows_scanned"] = profile.rows_scanned;
+  section["data_rows"] = profile.data_rows;
+  section["max_row"] = profile.max_row;
+  section["max_col"] = profile.max_col;
+  section["empty_rows"] = profile.empty_rows;
+  section["ragged_rows"] = profile.ragged_rows;
+  section["merged_ranges"] = profile.merged_ranges;
+  section["error_cells"] = profile.error_cells;
+  section["has_formulas"] = profile.has_formulas;
+  section["parallel"] = profile.parallel;
+  if (!profile.used_range.empty()) section["used_range"] = profile.used_range;
+  if (!profile.auto_filter.empty()) section["auto_filter"] = profile.auto_filter;
+  if (profile.pane_top_row > 0) section["pane_top_row"] = profile.pane_top_row;
+  section["hidden_columns"] = profile.hidden_columns;
+  Json columns = Json::array();
+  std::unordered_map<std::string, size_t> seen;
+  for (const Column& column : profile.columns) {
+    const std::string original = column_name(column);
+    std::string name = original;
+    size_t& count = seen[original];
+    ++count;
+    if (count > 1) name = original + "_" + std::to_string(count);
+    columns.push_back(column_json(column, name, original));
+  }
+  section["columns"] = std::move(columns);
+  section["issues"] = profile.issues;
+  return section;
+}
+
+} // namespace
+
+int run_schema(const Args& args) {
+  if (args.positional.size() != 1) throw UsageError("schema takes exactly one file path");
+  const std::string& input = args.positional[0];
+  const Format format = resolve_format(args.from, input, "--from");
+  StdinSpool spool(input);
+  const std::filesystem::path path = spool.active() ? spool.path() : path_from_utf8(input);
+
+  ProfileOptions options;
+  options.header_row = args.header_row;
+  options.max_rows = args.max_rows;
+  options.distinct_cap = args.distinct_cap;
+  options.samples = args.sample;
+  options.top_values = args.top;
+  options.jobs = args.jobs;
+
+  Json sheets = Json::array();
+  if (format == Format::Xlsx) {
+    WorkBook workbook = WorkBook::open(path);
+    std::vector<size_t> indices;
+    if (!args.sheet.empty()) {
+      indices.push_back(resolve_sheet_index(workbook, args.sheet));
+    } else {
+      for (size_t i = 0; i < workbook.sheets().size(); ++i) {
+        if (workbook.sheets()[i].kind() == SheetKind::Worksheet) indices.push_back(i);
+      }
+    }
+    for (size_t index : indices) {
+      ProfileOptions sheet_options = options;
+      if (args.header_auto)
+        sheet_options.header_row = detect_header_xlsx(workbook, index).row;
+      SheetProfile profile = profile_sheet(workbook, index, sheet_options);
+      profile.file = input;
+      sheets.push_back(section_json(std::string(workbook.sheets()[index].name()),
+                                    static_cast<uint32_t>(index),
+                                    sheet_state_name(workbook.sheets()[index].state()), profile));
+    }
+  } else if (format == Format::Csv || format == Format::Jsonl) {
+    ReadOptions read_options;
+    read_options.format = format;
+    read_options.header_row = args.header_row;
+    read_options.infer_types = args.infer;
+    read_options.delimiter = args.delimiter;
+    read_options.fill_gaps = args.fill_gaps;
+    read_options.max_rows = args.max_rows;
+    read_options.sheet = args.sheet;
+    if (args.header_auto && format == Format::Csv) {
+      char delimiter = args.delimiter;
+      if (delimiter == '\0' && path.extension() == ".tsv") delimiter = '\t';
+      if (delimiter == '\0') delimiter = ',';
+      const size_t limit = args.max_rows != 0 ? args.max_rows : 20;
+      const uint32_t width = csv_column_count(path, delimiter, std::max<size_t>(limit, 20));
+      ReadOptions scan_options = read_options;
+      scan_options.header_row = 0;
+      scan_options.max_rows = 0;
+      scan_options.column_count = width;
+      auto scan_reader = open_reader(path, scan_options);
+      read_options.header_row = detect_header_table(*scan_reader).row;
+      read_options.column_count = width;
+    } else if (args.header_auto) {
+      read_options.header_row = 0;
+    }
+    auto reader = open_reader(path, read_options);
+    SheetProfile profile = profile_table(*reader, options);
+    profile.file = input;
+    sheets.push_back(section_json(args.sheet.empty() ? "table" : args.sheet, 0, {},
+                                  profile));
+  } else {
+    throw UsageError("schema supports xlsx, csv and jsonl");
+  }
+
+  Json root;
+  root["version"] = 1;
+  root["ok"] = true;
+  root["file"] = input;
+  root["format"] = std::string(to_string(format));
+  root["header_auto"] = args.header_auto;
+  root["sheets"] = std::move(sheets);
+  fmt::print("{}\n", root.dump());
+  return 0;
+}
+
+} // namespace fastxl_cli

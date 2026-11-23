@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+*.exe binary
+*.pyd binary
+*.lib binary
+*.xlsx binary
+*.xlsm binary
+*.zip binary
