@@ -5,7 +5,7 @@
       "label": "xmake: configure debug",
       "type": "shell",
       "command": "xmake",
-      "args": ["f", "-p", "windows", "-a", "x64", "-m", "debug", "-y"],
+      "args": ["f", "-m", "debug", "-y"],
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -20,7 +20,7 @@
         "cwd": "${workspaceFolder}"
       },
       "dependsOn": "xmake: configure debug",
-      "problemMatcher": ["$msCompile"],
+      "problemMatcher": [],
       "group": {
         "kind": "build",
         "isDefault": true

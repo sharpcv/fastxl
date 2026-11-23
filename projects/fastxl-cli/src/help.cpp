@@ -50,7 +50,7 @@ std::string help_text() {
       "      --fill-gaps            emit empty cells between populated cells\n"
       "      --json                 machine-readable JSON where supported\n"
       "  -h, --help                 show help; with a command, show command help\n"
-      "      --version              print the version and exit\n"
+      "      --version              print fastxl and linked library versions, then exit\n"
       "\n" +
       std::string(kExitSummary) +
       "\n"

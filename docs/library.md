@@ -55,7 +55,7 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 支持平台：Windows x64 与 Linux（x86_64/aarch64），其他平台不在支持范围内。
 
 依赖：C++20 编译器、xmake；首次配置需要网络拉取 minizip-ng（仅 STORE/DEFLATE，
-加密与签名关闭，链接 zlib-ng）与 zlib-ng、fast_float、simdutf、fmt、nlohmann_json。
+链接 zlib-ng，加密后端关闭）与 zlib-ng、fast_float、simdutf、fmt、nlohmann_json。
 
 ```sh
 xmake f -y -m release

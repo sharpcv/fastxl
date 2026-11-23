@@ -2,15 +2,35 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run fastxl-cli info (MSVC)",
+      "name": "Run fastxl-cli --version (MSVC)",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/fastxl-cli.exe",
-      "args": ["info", "${workspaceFolder}/projects/tests/fixtures/basic.xlsx", "--json"],
+      "args": ["--version"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [],
       "console": "integratedTerminal",
+      "preLaunchTask": "xmake: build fastxl-cli (debug)"
+    },
+    {
+      "name": "Run fastxl-cli --version (gdb)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/fastxl-cli",
+      "args": ["--version"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
       "preLaunchTask": "xmake: build fastxl-cli (debug)"
     }
   ]

@@ -107,8 +107,8 @@ projects/   core sources, CLI and tools
 ## Build from source
 
 Requires xmake and a C++20 compiler on Windows x64 or Linux. The first configure
-fetches minizip-ng and zlib-ng (ZIP STORE/DEFLATE only, encryption and signing
-off), fast_float, simdutf, fmt and nlohmann_json.
+fetches minizip-ng and zlib-ng (ZIP STORE/DEFLATE only, encryption compiled
+out), fast_float, simdutf, fmt and nlohmann_json.
 
 ```sh
 xmake f -y -m release
