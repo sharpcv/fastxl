@@ -10,30 +10,34 @@ index; JSON `sheet_index` values are 0-based.
 
 ```sh
 # Metadata only: parts, sheet names, sizes, shared-string count.
-fastxl-cli info book.xlsx --json
+fastxl-cli info book.xlsx --format jsonl
 
 # Raw rows with A1 refs, header candidates, column names, merge/used range.
 fastxl-cli preview book.xlsx --rows 20 [--sheet Data] [--header-row auto]
 
 # Full column profile: types, nulls, distinct, numeric stats, samples, flags.
-fastxl-cli probe book.xlsx --json [--sheet Data] [--jobs 4] [--max-rows N] [--top N]
+fastxl-cli probe book.xlsx --format jsonl [--sheet Data] [--jobs 4] [--max-rows N] [--top N]
 
 # Column schema for code generation: name, inferred type, nullability, stats.
-fastxl-cli schema book.xlsx --json [--sheet Data] [--header-row auto] [--max-rows N] [--top N]
+fastxl-cli schema book.xlsx --format jsonl [--sheet Data] [--header-row auto] [--max-rows N] [--top N]
 ```
+
+The CLI is human-readable by default (`text`, which is an aligned table for
+`schema`/`preview`). `--format table` forces the table layout; `--format jsonl`
+(alias `--json`) emits the JSON contract below.
 
 `preview` is the cheapest way to understand a sheet's shape: it returns the
 rows as written, each cell carrying `ref`, `col`, `type` and canonical text,
 plus `columns` (names derived from the selected header row),
 `header_candidates` with scores and reasons, and sheet metadata (`used_range`,
-`auto_filter`, `pane_top_row`, `hidden_columns`). It always prints JSON, for
-every format. All three probe commands accept `-` with `--from csv|jsonl|xlsx`;
-stdin is spooled to a temporary file.
+`auto_filter`, `pane_top_row`, `hidden_columns`). With `--format jsonl` it emits
+JSON for every input format. All three probe commands accept `-` with
+`--from csv|jsonl|xlsx`; stdin is spooled to a temporary file.
 
 The response contract is described by
 [docs/probe.schema.json](probe.schema.json) (JSON Schema 2020-12). All
-machine-facing payloads start with `"version": 1, "ok": true`. When a JSON
-command fails, stderr is a single JSON object:
+machine-facing payloads start with `"version": 1, "ok": true`. When a command run
+with `--format jsonl` fails, stderr is a single JSON object:
 
 ```json
 {"version":1,"ok":false,"error":{"code":"InvalidUtf8",
@@ -43,7 +47,7 @@ command fails, stderr is a single JSON object:
 
 `error.code` is stable; `error.exit_code` is the process exit code and
 `error.message` is human text. `UsageError` (exit 1) covers bad arguments;
-library failures use `fastxl::ErrorCode` names. `fastxl-cli errors --json`
+library failures use `fastxl::ErrorCode` names. `fastxl-cli errors --format jsonl`
 returns the full table of exit codes and error codes with one-line
 explanations:
 

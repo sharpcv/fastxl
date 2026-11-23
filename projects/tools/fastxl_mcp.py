@@ -59,16 +59,12 @@ def common_args(arguments, command):
     if arguments.get("sheet") is not None:
         args += ["--sheet", str(arguments["sheet"])]
     args += header_args(arguments.get("header_row"))
-    if command == "info":
-        args.append("--json")
-        return args
     if arguments.get("max_rows") is not None:
         args += ["--max-rows", str(arguments["max_rows"])]
     if command == "probe":
         for option in ("sample", "top", "distinct_cap", "jobs"):
             if arguments.get(option) is not None:
                 args += ["--" + option.replace("_", "-"), str(arguments[option])]
-        args.append("--json")
     if command == "schema":
         for option in ("sample", "top", "distinct_cap", "jobs"):
             if arguments.get(option) is not None:
@@ -77,6 +73,9 @@ def common_args(arguments, command):
         for option in ("rows", "range", "columns", "max_cell_bytes"):
             if arguments.get(option) is not None:
                 args += ["--" + option.replace("_", "-"), str(arguments[option])]
+    # Tools parse the JSON contract, so ask for it explicitly; the CLI defaults
+    # to a human-readable layout.
+    args.append("--json")
     return args
 
 

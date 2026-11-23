@@ -59,7 +59,7 @@ python "$SKILL/scripts/fastxl_skill.py" write result.xlsx --jsonl rows.jsonl --s
 
 All commands print one UTF-8 JSON object to stdout. Failures are one JSON object
 on stderr with a non-zero exit; the error object carries `code`, `message`,
-`exit_code`, `command` and `file`. `fastxl-cli errors --json` lists every error
+`exit_code`, `command` and `file`. `fastxl-cli errors --format jsonl` lists every error
 code with its exit code and one-line explanation. For
 `info`/`schema`/`probe`/`preview`/`convert`,
 `-` reads stdin when `--format csv|xlsx|jsonl` is given; stdin is spooled to a

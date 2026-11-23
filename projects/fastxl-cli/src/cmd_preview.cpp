@@ -16,6 +16,7 @@
 #include "fastxl/fastxl.hpp"
 #include "fastxl/text.hpp"
 #include "headers.hpp"
+#include "table.hpp"
 
 namespace fastxl_cli {
 
@@ -391,6 +392,49 @@ Json preview_root(const std::string& input, Format format, const std::string& sh
   return root;
 }
 
+void print_preview_output(const Args& args, const Json& root) {
+  if (args.format == OutputFormat::Jsonl) {
+    fmt::print("{}\n", root.dump());
+    return;
+  }
+
+  const auto& columns = root["columns"];
+  constexpr size_t kMaxColumns = 12;
+  const size_t shown = std::min<size_t>(columns.size(), kMaxColumns);
+
+  Table table;
+  table.max_width = 32;
+  table.headers.push_back("row");
+  std::vector<uint32_t> indices(shown, 0);
+  for (size_t i = 0; i < shown; ++i) {
+    indices[i] = columns[i]["index"].get<uint32_t>();
+    table.headers.push_back(columns[i]["letter"].get<std::string>() + ":" +
+                            columns[i]["name"].get<std::string>());
+  }
+
+  for (const auto& row : root["rows"]) {
+    std::vector<std::string> values(shown);
+    for (const auto& cell : row["cells"]) {
+      const uint32_t col = cell["col"].get<uint32_t>();
+      for (size_t i = 0; i < shown; ++i) {
+        if (indices[i] != col) continue;
+        values[i] = cell["text"].get<std::string>();
+        if (cell.value("truncated", false)) values[i] += "…";
+        break;
+      }
+    }
+    std::vector<TableCell> cells;
+    cells.push_back({std::to_string(row["number"].get<uint64_t>()), true});
+    for (size_t i = 0; i < shown; ++i) cells.push_back({std::move(values[i]), false});
+    table.rows.push_back(std::move(cells));
+  }
+
+  print_table(table);
+  if (columns.size() > shown)
+    fmt::print("… {} more columns; use --columns to include them\n", columns.size() - shown);
+  if (root["truncated"].get<bool>()) fmt::print("… more rows; increase --rows\n");
+}
+
 } // namespace
 
 int run_preview(const Args& args) {
@@ -411,14 +455,12 @@ int run_preview(const Args& args) {
     HeaderChoice choice = detect_header(sink.summaries(), sink.auto_filter(), sink.pane_top_row());
     const uint32_t header_row = args.header_auto ? choice.row : args.header_row;
     const WorkSheet& sheet = workbook.sheets()[index];
-    fmt::print(
-        "{}\n",
-        preview_root(input, format, std::string(sheet.name()), static_cast<uint32_t>(index),
-                     sheet_state_name(sheet.state()), range, choice, header_row, sink.rows(),
-                     sink.max_col(), wanted, {}, sink.used_range(), sink.auto_filter(),
-                     sink.pane_top_row(), sink.hidden_columns(), sink.more_rows(),
-                     args.header_auto)
-            .dump());
+    Json root = preview_root(input, format, std::string(sheet.name()),
+                             static_cast<uint32_t>(index), sheet_state_name(sheet.state()),
+                             range, choice, header_row, sink.rows(), sink.max_col(), wanted, {},
+                             sink.used_range(), sink.auto_filter(), sink.pane_top_row(),
+                             sink.hidden_columns(), sink.more_rows(), args.header_auto);
+    print_preview_output(args, root);
     return 0;
   }
 
@@ -477,11 +519,10 @@ int run_preview(const Args& args) {
   const std::string sheet_name = args.sheet.empty() ? "table" : args.sheet;
   std::vector<std::string_view> column_views;
   for (const auto& column : reader_columns) column_views.emplace_back(column);
-  fmt::print("{}\n",
-             preview_root(input, format, sheet_name, 0, {}, range, choice, header_row, rows,
-                          max_col, wanted, column_views, {}, {}, 0, {}, more_rows,
-                          args.header_auto)
-                 .dump());
+  Json root = preview_root(input, format, sheet_name, 0, {}, range, choice, header_row, rows,
+                           max_col, wanted, column_views, {}, {}, 0, {}, more_rows,
+                           args.header_auto);
+  print_preview_output(args, root);
   return 0;
 }
 

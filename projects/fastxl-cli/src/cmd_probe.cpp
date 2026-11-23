@@ -12,6 +12,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "table.hpp"
 
 namespace fastxl_cli {
 
@@ -182,6 +183,65 @@ void print_profile_text(const SheetProfile& profile) {
   }
 }
 
+std::string join_samples(const Json& samples, size_t limit) {
+  std::string text;
+  size_t count = 0;
+  for (const auto& value : samples) {
+    if (count == limit) {
+      text += ", …";
+      break;
+    }
+    if (!text.empty()) text += ", ";
+    text += value.get<std::string>();
+    ++count;
+  }
+  return text;
+}
+
+void print_probe_table(const Json& root) {
+  fmt::print("file: {}\n", root["file"].get<std::string>());
+  fmt::print("sheet: {} (index {})\n", root["sheet_name"].get<std::string>(),
+             root["sheet_index"].get<uint32_t>());
+  fmt::print("header_row: {}  rows: {}  max_row: {}  max_col: {}\n\n",
+             root["header_row"].get<uint32_t>(), root["rows_scanned"].get<uint64_t>(),
+             root["max_row"].get<uint64_t>(), root["max_col"].get<uint64_t>());
+
+  Table table;
+  table.headers = {"idx", "header", "types", "nulls", "distinct", "range", "samples"};
+  table.max_width = 32;
+  for (const auto& column : root["columns"]) {
+    std::string types;
+    for (const char* name : {"number", "text", "bool", "error", "date", "datetime", "time",
+                             "invalid"}) {
+      const uint64_t count = column["types"].value(name, uint64_t{0});
+      if (count == 0) continue;
+      if (!types.empty()) types += ", ";
+      types += std::string(name) + "=" + std::to_string(count);
+    }
+    std::string range = "-";
+    const auto& numeric = column["numeric"];
+    if (numeric.value("any", false) && numeric["min"].is_number() &&
+        numeric["max"].is_number()) {
+      range = fmt::format("{:g}..{:g}", numeric["min"].get<double>(),
+                          numeric["max"].get<double>());
+    }
+    std::string samples = join_samples(column["samples"], 3);
+    if (column.value("sample_truncated", false) && !samples.empty()) samples.append("…");
+    table.rows.push_back({{std::to_string(column["index"].get<uint32_t>()), true},
+                          {column["header"].get<std::string>(), false},
+                          {types.empty() ? "-" : types, false},
+                          {std::to_string(column["nulls"].get<uint64_t>()), true},
+                          {std::to_string(column["distinct"].get<uint64_t>()), true},
+                          {std::move(range), false},
+                          {std::move(samples), false}});
+  }
+  print_table(table);
+  if (!root["issues"].empty()) {
+    fmt::print("\nissues:\n");
+    for (const auto& issue : root["issues"]) fmt::print("  {}\n", issue.get<std::string>());
+  }
+}
+
 } // namespace
 
 int run_probe(const Args& args) {
@@ -240,10 +300,12 @@ int run_probe(const Args& args) {
     throw UsageError("probe supports xlsx, csv and jsonl");
   }
 
-  if (args.json) {
-    Json root = profile_json(profile);
-    root["header_auto"] = args.header_auto;
+  Json root = profile_json(profile);
+  root["header_auto"] = args.header_auto;
+  if (args.format == OutputFormat::Jsonl) {
     fmt::print("{}\n", root.dump());
+  } else if (args.format == OutputFormat::Table) {
+    print_probe_table(root);
   } else {
     print_profile_text(profile);
   }

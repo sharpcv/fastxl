@@ -11,6 +11,8 @@ struct UsageError : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+enum class OutputFormat { Text, Table, Jsonl };
+
 struct Args {
   std::string command;
   std::vector<std::string> positional;
@@ -20,7 +22,7 @@ struct Args {
   std::string sheet;
   uint32_t header_row = 1;
   bool header_auto = false;
-  bool json = false;
+  OutputFormat format = OutputFormat::Text;
   unsigned jobs = 0;
   size_t max_rows = 0;
   size_t sample = 5;

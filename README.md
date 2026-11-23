@@ -29,12 +29,18 @@ xmake build -y fastxl-cli fastxl-python
 On Windows add `-p windows -a x64` to the first command.
 
 ```sh
-build/bin/fastxl-cli info book.xlsx --json
-build/bin/fastxl-cli schema book.xlsx --json --header-row auto
-build/bin/fastxl-cli probe book.xlsx --json --sheet Data --jobs 4 --max-rows 200000
+build/bin/fastxl-cli info book.xlsx
+build/bin/fastxl-cli schema book.xlsx --header-row auto --format table
+build/bin/fastxl-cli probe book.xlsx --format jsonl --sheet Data --jobs 4 --max-rows 200000
 build/bin/fastxl-cli preview book.xlsx --rows 20
 build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 ```
+
+`--format` picks the output style: `text` (default — key/value for `info` and
+`probe`, an aligned table for `schema` and `preview`), `table` (forces the
+aligned table on every report), or `jsonl` (the machine contract; `--json` is an
+alias). Human output truncates long cells with `…` and caps wide tables, so use
+`--format jsonl` for scripts.
 
 `fastxl-cli --version` also lists the versions of the linked libraries
 (minizip-ng, zlib-ng, fast_float, simdutf, fmt, nlohmann_json).
@@ -52,9 +58,10 @@ rows = fastxl.preview("book.xlsx", sheet="Data", rows=20, with_cells=True)
 fastxl.write_xlsx("result.xlsx", rows["rows"], sheet_name="Result")
 ```
 
-All machine-facing payloads start with `{"version":1,"ok":true}`; failures are a
-single JSON object with a stable error code. The contract is described by
-[`docs/probe.schema.json`](docs/probe.schema.json).
+Machine-facing payloads start with `{"version":1,"ok":true}`; failures are a
+single JSON object with a stable error code. Pass `--format jsonl` (alias
+`--json`) to get them; the CLI default is human-readable. The contract is
+described by [`docs/probe.schema.json`](docs/probe.schema.json).
 
 ## Errors and exit codes
 
@@ -65,8 +72,9 @@ defaults and examples. Every failure prints the error code in both modes —
 JSON.
 
 ```sh
-fastxl-cli errors          # human-readable exit/error code reference
-fastxl-cli errors --json   # same table as JSON
+fastxl-cli errors                        # human-readable exit/error code reference
+fastxl-cli errors --format table         # aligned tables
+fastxl-cli errors --format jsonl         # same tables as JSON
 ```
 
 | Exit | Name | Meaning |

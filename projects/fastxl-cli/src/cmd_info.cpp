@@ -9,11 +9,39 @@
 
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
+#include "table.hpp"
 
 namespace fastxl_cli {
 
 using namespace fastxl;
 using Json = nlohmann::ordered_json;
+
+namespace {
+
+void print_info_table(const Json& root) {
+  fmt::print("file: {}\n", root["file"].get<std::string>());
+  fmt::print("size_bytes: {}\n", root["size_bytes"].get<uint64_t>());
+  fmt::print("date1904: {}\n", root["date1904"].get<bool>() ? "true" : "false");
+  fmt::print("shared_strings: {}\n", root["shared_strings"].get<uint64_t>());
+  fmt::print("sheets: {}\n\n", root["sheets"].size());
+
+  Table table;
+  table.headers = {"idx", "name", "kind", "state", "part", "bytes"};
+  table.max_width = 36;
+  for (const auto& sheet : root["sheets"]) {
+    std::vector<TableCell> row;
+    row.push_back({std::to_string(sheet["index"].get<uint32_t>()), true});
+    row.push_back({sheet["name"].get<std::string>(), false});
+    row.push_back({sheet["kind"].get<std::string>(), false});
+    row.push_back({sheet["state"].get<std::string>(), false});
+    row.push_back({sheet["part"].get<std::string>(), false});
+    row.push_back({std::to_string(sheet["uncompressed_bytes"].get<uint64_t>()), true});
+    table.rows.push_back(std::move(row));
+  }
+  print_table(table);
+}
+
+} // namespace
 
 int run_info(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("info takes exactly one workbook path");
@@ -32,30 +60,35 @@ int run_info(const Args& args) {
   const uint64_t size_bytes = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
   const std::string file_utf8 = args.positional[0];
 
-  if (args.json) {
-    Json root;
-    root["version"] = 1;
-    root["ok"] = true;
-    root["file"] = file_utf8;
-    root["size_bytes"] = size_bytes;
-    root["date1904"] = workbook.date_1904();
-    root["shared_strings"] = workbook.shared_string_count();
-    Json sheets = Json::array();
-    for (size_t i = 0; i < workbook.sheets().size(); ++i) {
-      const WorkSheet& sheet = workbook.sheets()[i];
-      Json entry;
-      entry["index"] = i;
-      entry["name"] = sheet.name();
-      entry["sheet_id"] = sheet.sheet_id();
-      entry["rel_id"] = sheet.rel_id();
-      entry["part"] = sheet.part_name();
-      entry["kind"] = std::string(sheet_kind_name(sheet.kind()));
-      entry["state"] = std::string(sheet_state_name(sheet.state()));
-      entry["uncompressed_bytes"] = sheet.uncompressed_bytes();
-      sheets.push_back(std::move(entry));
-    }
-    root["sheets"] = std::move(sheets);
+  Json root;
+  root["version"] = 1;
+  root["ok"] = true;
+  root["file"] = file_utf8;
+  root["size_bytes"] = size_bytes;
+  root["date1904"] = workbook.date_1904();
+  root["shared_strings"] = workbook.shared_string_count();
+  Json sheets = Json::array();
+  for (size_t i = 0; i < workbook.sheets().size(); ++i) {
+    const WorkSheet& sheet = workbook.sheets()[i];
+    Json entry;
+    entry["index"] = i;
+    entry["name"] = sheet.name();
+    entry["sheet_id"] = sheet.sheet_id();
+    entry["rel_id"] = sheet.rel_id();
+    entry["part"] = sheet.part_name();
+    entry["kind"] = std::string(sheet_kind_name(sheet.kind()));
+    entry["state"] = std::string(sheet_state_name(sheet.state()));
+    entry["uncompressed_bytes"] = sheet.uncompressed_bytes();
+    sheets.push_back(std::move(entry));
+  }
+  root["sheets"] = std::move(sheets);
+
+  if (args.format == OutputFormat::Jsonl) {
     fmt::print("{}\n", root.dump());
+    return 0;
+  }
+  if (args.format == OutputFormat::Table) {
+    print_info_table(root);
     return 0;
   }
 

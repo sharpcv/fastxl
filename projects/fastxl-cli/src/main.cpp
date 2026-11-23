@@ -20,7 +20,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 bool wants_json(const fastxl_cli::Args& args) {
-  return args.json || args.command == "schema" || args.command == "preview";
+  return args.format == fastxl_cli::OutputFormat::Jsonl;
 }
 
 void report_error(const fastxl_cli::Args& args, std::string_view code,

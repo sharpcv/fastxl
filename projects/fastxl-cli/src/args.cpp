@@ -73,7 +73,18 @@ Args parse_args(const std::vector<std::string>& argv) {
     };
 
     if (name == "--json") {
-      args.json = true;
+      args.format = OutputFormat::Jsonl;
+    } else if (name == "--format") {
+      const std::string value = take_value();
+      if (value == "text") {
+        args.format = OutputFormat::Text;
+      } else if (value == "table") {
+        args.format = OutputFormat::Table;
+      } else if (value == "jsonl" || value == "json") {
+        args.format = OutputFormat::Jsonl;
+      } else {
+        throw UsageError("--format must be text, table or jsonl: " + value);
+      }
     } else if (name == "--no-header") {
       args.header_row = 0;
       args.header_auto = false;
@@ -189,21 +200,24 @@ std::vector<size_t> parse_column_projection(const std::string& spec) {
 std::string usage_text() {
   return
       "Usage:\n"
-      "  fastxl-cli info <file.xlsx> [--json]\n"
+      "  fastxl-cli info <file.xlsx> [--format text|table|jsonl]\n"
       "  fastxl-cli probe <file> [--sheet <name|index>] [--header-row N|auto|--no-header]\n"
-      "                          [--max-rows N] [--sample N] [--top N] [--distinct-cap N] [--jobs N] [--json]\n"
+      "                          [--max-rows N] [--sample N] [--top N] [--distinct-cap N]\n"
+      "                          [--jobs N] [--format text|table|jsonl]\n"
       "  fastxl-cli schema <file> [--sheet ...] [--header-row N|auto|--no-header] [--max-rows N]\n"
-      "                          [--sample N] [--top N] [--distinct-cap N] [--jobs N]   # JSON schema\n"
+      "                          [--sample N] [--top N] [--distinct-cap N] [--jobs N]\n"
+      "                          [--format text|table|jsonl]\n"
       "  fastxl-cli preview <file> [--sheet ...] [--header-row N|auto|--no-header]\n"
       "                          [--rows N] [--range A1:F20] [--columns 1,3-5]\n"
-      "                          [--max-cell-bytes N]                     # JSON rows\n"
+      "                          [--max-cell-bytes N] [--format text|table|jsonl]\n"
       "  fastxl-cli convert <input|-> --out <output|-> [--from xlsx|csv|jsonl] [--to ...]\n"
       "                          [--sheet ...] [--header-row N|--no-header] [--delimiter C]\n"
       "                          [--infer|--no-infer] [--normalize] [--fill-gaps]\n"
       "                          [--columns 1,3-5] [--limit N] [--crlf] [--bom]\n"
       "                          [--sheet-name NAME] [--compress-level N]\n"
-      "  fastxl-cli errors [--json]                             # exit/error code reference\n"
-      "  fastxl-cli --help | --version                          # --version lists dependency versions\n"
+      "  fastxl-cli errors [--format text|table|jsonl]          # exit/error code reference\n"
+      "  fastxl-cli --help | --version\n"
+      "  --format is text (default), table or jsonl; --json is an alias for jsonl.\n"
       "  --sheet accepts a sheet name or a 1-based index; `info` lists the order.\n";
 }
 

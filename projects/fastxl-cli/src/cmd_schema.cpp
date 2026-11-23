@@ -13,6 +13,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "table.hpp"
 
 namespace fastxl_cli {
 
@@ -139,6 +140,46 @@ Json section_json(const std::string& name, uint32_t index, std::string_view stat
   return section;
 }
 
+std::string join_values(const Json& values, size_t limit) {
+  std::string text;
+  size_t count = 0;
+  for (const auto& value : values) {
+    if (count == limit) {
+      text += ", …";
+      break;
+    }
+    if (!text.empty()) text += ", ";
+    text += value.get<std::string>();
+    ++count;
+  }
+  return text;
+}
+
+void print_schema_table(const Json& root) {
+  fmt::print("file: {}\n", root["file"].get<std::string>());
+  fmt::print("format: {}\n", root["format"].get<std::string>());
+  for (const auto& sheet : root["sheets"]) {
+    fmt::print("\n[{}] {}  header_row={}  data_rows={}  max_col={}\n\n",
+               sheet["index"].get<uint32_t>(), sheet["name"].get<std::string>(),
+               sheet["header_row"].get<uint32_t>(), sheet["data_rows"].get<uint64_t>(),
+               sheet["max_col"].get<uint64_t>());
+    Table table;
+    table.headers = {"idx", "name", "type", "nulls", "distinct", "samples"};
+    table.max_width = 32;
+    for (const auto& column : sheet["columns"]) {
+      std::string samples = join_values(column["samples"], 3);
+      if (column.value("sample_truncated", false) && !samples.empty()) samples.append("…");
+      table.rows.push_back({{std::to_string(column["index"].get<uint32_t>()), true},
+                            {column["name"].get<std::string>(), false},
+                            {column["type"].get<std::string>(), false},
+                            {std::to_string(column["nulls"].get<uint64_t>()), true},
+                            {std::to_string(column["distinct"].get<uint64_t>()), true},
+                            {std::move(samples), false}});
+    }
+    print_table(table);
+  }
+}
+
 } // namespace
 
 int run_schema(const Args& args) {
@@ -218,7 +259,11 @@ int run_schema(const Args& args) {
   root["format"] = std::string(to_string(format));
   root["header_auto"] = args.header_auto;
   root["sheets"] = std::move(sheets);
-  fmt::print("{}\n", root.dump());
+  if (args.format == OutputFormat::Jsonl) {
+    fmt::print("{}\n", root.dump());
+    return 0;
+  }
+  print_schema_table(root);
   return 0;
 }
 

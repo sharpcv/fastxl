@@ -21,13 +21,13 @@ std::string help_text() {
       "  fastxl-cli <command> [options]\n"
       "  fastxl-cli <command> --help\n"
       "  fastxl-cli --help | --version\n"
-      "  fastxl-cli errors [--json]\n"
+      "  fastxl-cli errors [--format text|table|jsonl]\n"
       "\n"
       "Commands:\n"
       "  info <file.xlsx>           workbook metadata (xlsx only)\n"
       "  probe <file>               per-column profile: types, nulls, stats, samples\n"
-      "  schema <file>              column schema for code generation (JSON)\n"
-      "  preview <file>             rows with A1 refs and header candidates (JSON)\n"
+      "  schema <file>              column schema for code generation\n"
+      "  preview <file>             rows with A1 refs and header candidates\n"
       "  convert <input> --out P    stream xlsx/csv/jsonl to another format\n"
       "  errors                     list error codes, exit codes and meanings\n"
       "\n"
@@ -48,16 +48,17 @@ std::string help_text() {
       "      --delimiter C          CSV delimiter: `,` `;` or `tab`\n"
       "      --no-infer             keep CSV/JSONL values as text\n"
       "      --fill-gaps            emit empty cells between populated cells\n"
-      "      --json                 machine-readable JSON where supported\n"
+      "      --format FMT           output style: text (default), table or jsonl\n"
+      "      --json                 alias for --format jsonl\n"
       "  -h, --help                 show help; with a command, show command help\n"
       "      --version              print fastxl and linked library versions, then exit\n"
       "\n" +
       std::string(kExitSummary) +
       "\n"
       "Examples:\n"
-      "  fastxl-cli info book.xlsx --json\n"
-      "  fastxl-cli schema book.xlsx --sheet Data --header-row auto\n"
-      "  fastxl-cli probe book.xlsx --json --jobs 4 --max-rows 200000\n"
+      "  fastxl-cli info book.xlsx\n"
+      "  fastxl-cli schema book.xlsx --sheet Data --header-row auto --format table\n"
+      "  fastxl-cli probe book.xlsx --format jsonl --jobs 4 --max-rows 200000\n"
       "  fastxl-cli preview book.xlsx --rows 20 --columns 1,3-5\n"
       "  fastxl-cli convert data.csv --out book.xlsx --header-row 1\n";
 }
@@ -68,7 +69,7 @@ std::string command_help(const std::string& command) {
         "fastxl-cli info — workbook metadata\n"
         "\n"
         "Usage:\n"
-        "  fastxl-cli info <file.xlsx> [--from xlsx] [--json]\n"
+        "  fastxl-cli info <file.xlsx> [--from xlsx] [--format text|table|jsonl]\n"
         "\n"
         "Reads the OPC package without parsing cell data: sheet order, names, ids,\n"
         "relationships, part names, visibility, uncompressed sizes and the shared-string\n"
@@ -76,16 +77,18 @@ std::string command_help(const std::string& command) {
         "\n"
         "Options:\n"
         "      --from xlsx     explicit input format (xlsx is the only supported one)\n"
-        "      --json          JSON payload on stdout; failures are JSON on stderr\n"
+        "      --format FMT    text (default), table or jsonl\n"
+        "      --json          alias for --format jsonl\n"
         "  -h, --help          show this help\n"
         "\n"
         "Output:\n"
-        "  A human table by default; --json emits {\"version\":1,\"ok\":true,...}.\n"
+        "  Key/value text by default; --format table renders the sheet list, --format\n"
+        "  jsonl emits {\"version\":1,\"ok\":true,...}.\n"
         "\n" +
         std::string(kExitSummary) +
         "\n"
         "Example:\n"
-        "  fastxl-cli info book.xlsx --json\n";
+        "  fastxl-cli info book.xlsx --format table\n";
 
   if (command == "probe")
     return
@@ -113,13 +116,14 @@ std::string command_help(const std::string& command) {
         "      --jobs N               0 = auto, 1 = single thread, max 1024\n"
         "      --no-infer             keep CSV/JSONL values as text\n"
         "      --fill-gaps            emit empty cells between populated cells\n"
-        "      --json                 JSON payload (default: human report)\n"
+        "      --format FMT           text (default), table or jsonl\n"
+        "      --json                 alias for --format jsonl\n"
         "  -h, --help                 show this help\n"
         "\n" +
         std::string(kExitSummary) +
         "\n"
         "Example:\n"
-        "  fastxl-cli probe book.xlsx --sheet Data --json --jobs 4\n";
+        "  fastxl-cli probe book.xlsx --sheet Data --format table --jobs 4\n";
 
   if (command == "schema")
     return
@@ -130,9 +134,9 @@ std::string command_help(const std::string& command) {
         "  fastxl-cli schema - --from csv|jsonl|xlsx [options]\n"
         "\n"
         "Profiles one sheet and emits columns with name, inferred type, nullability,\n"
-        "statistics and sample values, plus header detection metadata. Output is always\n"
-        "JSON. It accepts the same options as `probe` and is the compact machine-facing\n"
-        "view of a table.\n"
+        "statistics and sample values, plus header detection metadata. The default text\n"
+        "layout is an aligned table; --format jsonl emits the compact machine-facing\n"
+        "contract for code generation.\n"
         "\n"
         "Options:\n"
         "      --sheet <name|index>   worksheet (default: first worksheet)\n"
@@ -147,12 +151,14 @@ std::string command_help(const std::string& command) {
         "      --jobs N               0 = auto, 1 = single thread, max 1024\n"
         "      --no-infer             keep CSV/JSONL values as text\n"
         "      --fill-gaps            emit empty cells between populated cells\n"
+        "      --format FMT           text (default), table or jsonl\n"
+        "      --json                 alias for --format jsonl\n"
         "  -h, --help                 show this help\n"
         "\n" +
         std::string(kExitSummary) +
         "\n"
         "Example:\n"
-        "  fastxl-cli schema book.xlsx --sheet Data --header-row auto\n";
+        "  fastxl-cli schema book.xlsx --sheet Data --header-row auto --format jsonl\n";
 
   if (command == "preview")
     return
@@ -164,7 +170,9 @@ std::string command_help(const std::string& command) {
         "\n"
         "Returns the first rows as written, each cell carrying ref, column, type and\n"
         "canonical text, plus derived column names, header candidates and sheet metadata\n"
-        "(used range, auto filter, frozen pane, hidden columns). Output is always JSON.\n"
+        "(used range, auto filter, frozen pane, hidden columns). The default text layout\n"
+        "is an aligned table with at most 12 columns; --format jsonl emits the full\n"
+        "JSON payload.\n"
         "\n"
         "Options:\n"
         "      --sheet <name|index>   worksheet (default: first worksheet)\n"
@@ -178,6 +186,8 @@ std::string command_help(const std::string& command) {
         "      --delimiter C          CSV delimiter: `,` `;` or tab\n"
         "      --no-infer             keep CSV/JSONL values as text\n"
         "      --fill-gaps            emit empty cells between populated cells\n"
+        "      --format FMT           text (default), table or jsonl\n"
+        "      --json                 alias for --format jsonl\n"
         "  -h, --help                 show this help\n"
         "\n" +
         std::string(kExitSummary) +
@@ -227,18 +237,19 @@ std::string command_help(const std::string& command) {
         "fastxl-cli errors — exit and error code reference\n"
         "\n"
         "Usage:\n"
-        "  fastxl-cli errors [--json]\n"
+        "  fastxl-cli errors [--format text|table|jsonl]\n"
         "\n"
         "Lists every exit code and every stable error code with its exit code and a\n"
         "one-line explanation. `UsageError` covers command-line mistakes; the other names\n"
         "are fastxl::ErrorCode values from the library.\n"
         "\n"
         "Options:\n"
-        "      --json      emit {\"version\":1,\"ok\":true,\"exit_codes\":...,\"error_codes\":...}\n"
-        "  -h, --help      show this help\n"
+        "      --format FMT  text (default), table or jsonl\n"
+        "      --json        alias for --format jsonl\n"
+        "  -h, --help        show this help\n"
         "\n"
         "Example:\n"
-        "  fastxl-cli errors --json\n";
+        "  fastxl-cli errors --format jsonl\n";
 
   return {};
 }

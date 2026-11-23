@@ -354,7 +354,7 @@ def cmd_schema(args: _SchemaArgs) -> JsonPayload:
             distinct_cap=args.distinct_cap,
             jobs=args.jobs,
         )
-    cli = ["schema", args.file, *common_selector(args)]
+    cli = ["schema", args.file, *common_selector(args), "--json"]
     cli += ["--max-rows", str(args.max_rows), "--sample", str(args.sample),
             "--top", str(args.top), "--distinct-cap", str(args.distinct_cap),
             "--jobs", str(args.jobs)]
@@ -413,7 +413,7 @@ def cmd_preview(args: _PreviewArgs) -> JsonPayload:
             find_cli()
         except RuntimeError:
             return result
-    cli = ["preview", args.file, *common_selector(args)]
+    cli = ["preview", args.file, *common_selector(args), "--json"]
     if args.no_infer:
         cli += ["--no-infer"]
     if args.rows == 0:

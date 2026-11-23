@@ -896,8 +896,9 @@ CLI 退出码：
 | 3 | 输出/原子替换错误（`IoError`、`AtomicReplaceFailed`） |
 | 4 | 内部错误（`Internal`、`Closed`、顺序错误等） |
 
-JSON 失败对象包含 `error.code`、`error.message` 和 `error.exit_code`。
-`fastxl-cli errors [--json]` 列出全部错误码、对应的退出码和一行解释。
+以 `--format jsonl` 运行时，JSON 失败对象包含 `error.code`、`error.message` 和
+`error.exit_code`。
+`fastxl-cli errors [--format text|table|jsonl]` 列出全部错误码、对应的退出码和一行解释。
 
 ---
 
@@ -954,23 +955,23 @@ JSON 失败对象包含 `error.code`、`error.message` 和 `error.exit_code`。
 ## 13. CLI 速览
 
 ```sh
-fastxl-cli info <file.xlsx> [--json]
+fastxl-cli info <file.xlsx> [--format text|table|jsonl]
 fastxl-cli preview <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--rows N] [--range A1:F20] [--columns 1,3-5]
-                          [--max-cell-bytes N]
+                          [--max-cell-bytes N] [--format text|table|jsonl]
 fastxl-cli probe <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
-                          [--distinct-cap N] [--jobs N] [--json]
+                          [--distinct-cap N] [--jobs N] [--format text|table|jsonl]
 fastxl-cli schema <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
-                          [--distinct-cap N] [--jobs N]
+                          [--distinct-cap N] [--jobs N] [--format text|table|jsonl]
 fastxl-cli convert <in|-> --out <out|-> [--from ...] [--to ...]
                           [--sheet ...] [--header-row N|--no-header]
                           [--delimiter C] [--infer|--no-infer]
                           [--normalize] [--fill-gaps] [--columns 1,3-5]
                           [--limit N] [--crlf] [--bom]
                           [--sheet-name NAME] [--compress-level N]
-fastxl-cli errors [--json]
+fastxl-cli errors [--format text|table|jsonl]
 fastxl-cli --version
 fastxl-cli --help
 fastxl-cli <command> --help
@@ -984,9 +985,13 @@ fastxl-cli <command> --help
 - `--version` 输出 fastxl 版本与依赖库版本：minizip-ng、zlib-ng、fast_float、
   simdutf、fmt、nlohmann_json。
 - `probe/schema/preview` 接受 `-`，但必须用 `--from` 指定格式；stdin 会 spool 到临时文件。
-- 机器可读 JSON 成功时带 `"version":1,"ok":true`；失败时 stderr 为
+- 输出格式：`--format text|table|jsonl`，默认 `text`。`text` 在 `info`/`probe` 下是
+  键值报告，在 `schema`/`preview` 下是对齐表格；`table` 强制表格；`jsonl`
+  （`--json` 同义）输出机器 JSON。
+- 以 `--format jsonl` 运行时，成功输出带 `"version":1,"ok":true`；失败时 stderr 为
   `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。
-- `schema`/`preview` 始终 JSON；`info`/`probe` 需要 `--json`。
+- 人读表格会把过长单元格截断为 `…`，`preview` 默认最多显示 12 列；脚本请用
+  `--format jsonl`。
 - MCP 包装：`python projects/tools/fastxl_mcp.py --cli <fastxl-cli>`；工具名为
   `fastxl_info`、`fastxl_preview`、`fastxl_schema`、`fastxl_probe`。
 
