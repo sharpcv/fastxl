@@ -2,9 +2,11 @@
 #include <string>
 #include <string_view>
 
+#include <fast_float/float_common.h>
 #include <fmt/format.h>
 #include <minizip/mz.h>
 #include <nlohmann/json.hpp>
+#include <simdutf/simdutf_version.h>
 #include <zlib.h>
 
 #include "args.hpp"
@@ -16,14 +18,6 @@
 namespace {
 
 using Json = nlohmann::ordered_json;
-
-std::string_view zlib_engine() {
-#ifdef ZLIBNG_VERSION
-  return "zlib-ng " ZLIBNG_VERSION;
-#else
-  return "zlib " ZLIB_VERSION;
-#endif
-}
 
 bool wants_json(const fastxl_cli::Args& args) {
   return args.json || args.command == "schema" || args.command == "preview";
@@ -62,10 +56,18 @@ int main(int argc, char** argv) {
     args = fastxl_cli::parse_args(arguments);
     if (args.version) {
       fmt::print("fastxl {}\n", FASTXL_VERSION);
-      fmt::print("  zip: minizip-ng {} + {} (zlib API {})\n", MZ_VERSION,
-                 zlib_engine(), zlibVersion());
-      fmt::print("  built without: OpenSSL, ZipCrypto, WinZip AES, signing, "
-                 "bzip2, lzma, zstd, Apple compression\n");
+      fmt::print("  {:<14} {}\n", "minizip-ng", MZ_VERSION);
+#ifdef ZLIBNG_VERSION
+      fmt::print("  {:<14} {} (only deflate)\n", "zlib-ng", ZLIBNG_VERSION);
+#else
+      fmt::print("  {:<14} {} (only deflate)\n", "zlib", ZLIB_VERSION);
+#endif
+      fmt::print("  {:<14} {}\n", "fast_float", FASTFLOAT_VERSION_STR);
+      fmt::print("  {:<14} {}\n", "simdutf", SIMDUTF_VERSION);
+      fmt::print("  {:<14} {}.{}.{}\n", "fmt", FMT_VERSION / 10000,
+                 (FMT_VERSION / 100) % 100, FMT_VERSION % 100);
+      fmt::print("  {:<14} {}.{}.{}\n", "nlohmann_json", NLOHMANN_JSON_VERSION_MAJOR,
+                 NLOHMANN_JSON_VERSION_MINOR, NLOHMANN_JSON_VERSION_PATCH);
       return 0;
     }
     if (!args.command.empty() && args.help) {

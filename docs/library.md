@@ -981,7 +981,8 @@ fastxl-cli <command> --help
 - `fastxl-cli --help` 打印命令概览，`fastxl-cli <command> --help` 打印该命令的
   全部选项、默认值和示例；不带任何参数等价于 `--help`，退出码为 0。
 - `--sheet` 接受名称或 1-based 索引；JSON 的 `sheet_index` 是 0-based。
-- `--version` 输出 fastxl 版本、ZIP 栈（minizip-ng + zlib-ng）和编译时关闭的后端。
+- `--version` 输出 fastxl 版本与依赖库版本：minizip-ng、zlib-ng、fast_float、
+  simdutf、fmt、nlohmann_json。
 - `probe/schema/preview` 接受 `-`，但必须用 `--from` 指定格式；stdin 会 spool 到临时文件。
 - 机器可读 JSON 成功时带 `"version":1,"ok":true`；失败时 stderr 为
   `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。

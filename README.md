@@ -36,8 +36,8 @@ build/bin/fastxl-cli preview book.xlsx --rows 20
 build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 ```
 
-`fastxl-cli --version` also lists the linked ZIP stack (minizip-ng + zlib-ng)
-and the backends compiled out.
+`fastxl-cli --version` also lists the versions of the linked libraries
+(minizip-ng, zlib-ng, fast_float, simdutf, fmt, nlohmann_json).
 
 Python:
 
