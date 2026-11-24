@@ -10,9 +10,8 @@ understand a workbook, check data quality, convert between formats, or write a
 new clean workbook. There is **no formula engine**: cached values are read,
 formulas are dropped on write, and legacy `.xls` (CFB) is rejected.
 
-The canonical copy lives at `D:/Projects/fastxl/skill`; it is installed for omp
-at `~/.agents/skills/fastxl` and mirrored at `D:/BI/Skills/fastxl`. Paths inside
-the skill are relative to its root; set `SKILL` once when invoking from another
+The skill is installed for omp at `~/.agents/skills/fastxl`. Paths inside the
+skill are relative to its root; set `SKILL` once when invoking from another
 directory. The wrapper finds its own Python module and CLI, so input paths
 resolve against the current working directory.
 
@@ -35,7 +34,7 @@ the fallback with `FASTXL_FORCE_CLI=1`; override the backend with `FASTXL_CLI`.
 ## Quick start
 
 ```bash
-SKILL="$HOME/.agents/skills/fastxl"   # canonical copy: D:/Projects/fastxl/skill
+SKILL="$HOME/.agents/skills/fastxl"
 
 # xlsx metadata: sheets, visibility, parts, sizes
 python "$SKILL/scripts/fastxl_skill.py" info book.xlsx
