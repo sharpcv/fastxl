@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "datetime.hpp"
+#include "error.hpp"
 #include "types.hpp"
 #include "workbook.hpp"
 
@@ -60,10 +61,13 @@ private:
 };
 
 struct DomOptions {
-  // 0 = unlimited (the default). Set a cap to fail fast on unexpectedly large
-  // workbooks; the DOM materialises every cell, so caps are opt-in.
+  // 0 = unlimited. Set a cap to fail fast on unexpectedly large workbooks; the
+  // DOM materialises every cell, so the default is a 1 GiB safety limit.
   size_t max_cells = 0;
   size_t max_bytes = 0;
+  // Default DOM memory cap (1 GiB). 0 disables it. DomOptions::max_bytes still
+  // applies when set; the smaller nonzero limit wins.
+  size_t max_memory_bytes = 1ull << 30;
 };
 
 // Loads a workbook fully into memory. There is no default size cap, but the DOM
@@ -72,6 +76,7 @@ struct DomOptions {
 class DomWorkBook {
 public:
   static DomWorkBook load(const std::filesystem::path&, const DomOptions& = {});
+  static Result<DomWorkBook> try_load(const std::filesystem::path&, const DomOptions& = {});
   const std::vector<DomWorkSheet>& sheets() const noexcept;
   bool date_1904() const noexcept;
 

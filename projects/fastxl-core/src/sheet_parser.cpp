@@ -1,5 +1,8 @@
 #include "sheet_parser.hpp"
 
+#include <string>
+#include <vector>
+
 #include "excel_escape.hpp"
 #include "fastxl/datetime.hpp"
 #include "fastxl/error.hpp"
@@ -36,6 +39,11 @@ enum class Tag : uint8_t {
   Col,
   Pane,
   AutoFilter,
+  FilterColumn,
+  Filters,
+  Filter,
+  CustomFilter,
+  CustomFilters,
   Hyperlink
 };
 
@@ -135,6 +143,10 @@ Tag tag_from_name(std::string_view name) noexcept {
     if (name == "formula1") return Tag::ValidationFormula1;
     if (name == "formula2") return Tag::ValidationFormula2;
     return Tag::Other;
+  case 6:
+    return name == "filter" ? Tag::Filter : Tag::Other;
+  case 7:
+    return name == "filters" ? Tag::Filters : Tag::Other;
   case 9:
     if (name == "mergeCell") return Tag::MergeCell;
     if (name == "sheetData") return Tag::SheetData;
@@ -143,6 +155,12 @@ Tag tag_from_name(std::string_view name) noexcept {
     return Tag::Other;
   case 10:
     return name == "autoFilter" ? Tag::AutoFilter : Tag::Other;
+  case 12:
+    if (name == "filterColumn") return Tag::FilterColumn;
+    if (name == "customFilter") return Tag::CustomFilter;
+    return Tag::Other;
+  case 13:
+    return name == "customFilters" ? Tag::CustomFilters : Tag::Other;
   case 14:
     return name == "dataValidation" ? Tag::DataValidation : Tag::Other;
   default:
@@ -274,10 +292,58 @@ private:
     case Tag::AutoFilter: {
       std::string scratch;
       sink_.auto_filter(cursor.attr("ref", scratch));
-      push(Tag::Other);
+      in_auto_filter_ = !cursor.self_closing();
+      push(Tag::AutoFilter);
       if (cursor.self_closing()) pop();
       return;
     }
+
+    case Tag::FilterColumn: {
+      if (!in_auto_filter_) {
+        push(Tag::Other);
+        if (cursor.self_closing()) pop();
+        return;
+      }
+      emit_filter_column();
+      filter_col_id_ = attr_uint(cursor, "colId");
+      in_filter_column_ = !cursor.self_closing();
+      push(Tag::FilterColumn);
+      if (cursor.self_closing()) {
+        emit_filter_column();
+        pop();
+      }
+      return;
+    }
+
+    case Tag::Filter: {
+      if (in_filter_column_) {
+        std::string scratch;
+        filter_values_.emplace_back(cursor.attr("val", scratch));
+      }
+      push(Tag::Filter);
+      if (cursor.self_closing()) pop();
+      return;
+    }
+
+    case Tag::CustomFilter: {
+      if (in_filter_column_) {
+        std::string scratch;
+        std::string op(cursor.attr("operator", scratch));
+        if (op.empty()) op = "equal";
+        std::string value(cursor.attr("val", scratch));
+        filter_ops_.push_back(std::move(op));
+        filter_values_custom_.push_back(std::move(value));
+      }
+      push(Tag::CustomFilter);
+      if (cursor.self_closing()) pop();
+      return;
+    }
+
+    case Tag::Filters:
+    case Tag::CustomFilters:
+      push(tag_from_name(cursor.tag_name()));
+      if (cursor.self_closing()) pop();
+      return;
 
     case Tag::Hyperlink: {
       std::string scratch;
@@ -518,6 +584,26 @@ private:
     sink_.data_validation(view);
   }
 
+  void emit_filter_column() {
+    if (!in_filter_column_) return;
+    in_filter_column_ = false;
+    std::vector<std::string_view> values;
+    values.reserve(filter_values_.size());
+    for (const std::string& value : filter_values_) values.push_back(value);
+    std::vector<FilterConditionView> custom;
+    custom.reserve(filter_ops_.size());
+    for (size_t i = 0; i < filter_ops_.size(); ++i)
+      custom.push_back({filter_ops_[i], filter_values_custom_[i]});
+    FilterColumnView view;
+    view.col_id = filter_col_id_;
+    view.values = values;
+    view.custom = custom;
+    sink_.filter_column(view);
+    filter_values_.clear();
+    filter_ops_.clear();
+    filter_values_custom_.clear();
+  }
+
   void on_end(XmlCursor& cursor) {
     switch (tag_from_name(cursor.tag_name())) {
     case Tag::Row:
@@ -540,6 +626,14 @@ private:
         emit_validation();
         in_validation_ = false;
       }
+      pop();
+      return;
+    case Tag::FilterColumn:
+      emit_filter_column();
+      pop();
+      return;
+    case Tag::AutoFilter:
+      in_auto_filter_ = false;
       pop();
       return;
     default:
@@ -722,6 +816,12 @@ private:
   bool in_phonetic_ = false;
   bool in_validation_ = false;
   bool validation_allow_blank_ = false;
+  bool in_auto_filter_ = false;
+  bool in_filter_column_ = false;
+  uint32_t filter_col_id_ = 0;
+  std::vector<std::string> filter_values_;
+  std::vector<std::string> filter_ops_;
+  std::vector<std::string> filter_values_custom_;
   std::string validation_type_;
   std::string validation_sqref_;
   std::string validation_formula1_;

@@ -117,6 +117,20 @@ struct DataValidationView {
   bool allow_blank = false;
 };
 
+// One <customFilter> inside an autoFilter's <customFilters>.
+struct FilterConditionView {
+  std::string_view op;
+  std::string_view value;
+};
+
+// One <filterColumn> inside an autoFilter. `col_id` is the raw 0-based OOXML
+// colId; values and custom views are valid during the callback only.
+struct FilterColumnView {
+  uint32_t col_id = 0;
+  std::span<const std::string_view> values;
+  std::span<const FilterConditionView> custom;
+};
+
 struct ReadStats {
   uint64_t rows = 0;
   uint64_t cells = 0;
@@ -135,6 +149,7 @@ public:
   virtual void on_row_info(uint32_t, const RowInfo&) {}
   virtual void on_pane(const PaneView&) {}
   virtual void on_auto_filter(std::string_view) {}
+  virtual void on_filter_column(const FilterColumnView&) {}
   virtual void on_hyperlink(const HyperlinkView&) {}
   virtual void on_data_validation(const DataValidationView&) {}
   virtual bool on_row_begin(uint32_t) { return true; }
@@ -153,6 +168,7 @@ struct SaxCallbacks {
   std::function<void(uint32_t, const RowInfo&)> row_info;
   std::function<void(const PaneView&)> pane;
   std::function<void(std::string_view)> auto_filter;
+  std::function<void(const FilterColumnView&)> filter_column;
   std::function<void(const HyperlinkView&)> hyperlink;
   std::function<void(const DataValidationView&)> data_validation;
   std::function<bool(uint32_t)> row_begin;

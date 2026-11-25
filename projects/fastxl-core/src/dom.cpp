@@ -56,12 +56,26 @@ public:
       rows_->back().cells.reserve(width_hint_);
     const size_t bytes = cell.text.size() + cell.formula.size() + sizeof(Cell) + 32;
     const bool over_cells = options_.max_cells != 0 && *cells_ + 1 > options_.max_cells;
-    const bool over_bytes = options_.max_bytes != 0 && *bytes_ + bytes > options_.max_bytes;
+    size_t byte_limit = options_.max_bytes;
+    if (options_.max_memory_bytes != 0 &&
+        (byte_limit == 0 || options_.max_memory_bytes < byte_limit))
+      byte_limit = options_.max_memory_bytes;
+    const bool over_bytes = byte_limit != 0 && *bytes_ + bytes > byte_limit;
     if (over_cells || over_bytes) {
+      if (over_cells)
+        throw_error(ErrorCode::LimitExceeded,
+                    "DOM cell limit exceeded; prefer WorkBook/SaxHandler or "
+                    "profile_sheet for large sheets, or set DomOptions::max_cells = 0");
+      if (byte_limit == options_.max_memory_bytes &&
+          byte_limit != options_.max_bytes)
+        throw_error(ErrorCode::LimitExceeded,
+                    "DOM memory limit exceeded (" + std::to_string(byte_limit) +
+                        " bytes); raise DomOptions::max_memory_bytes, prefer "
+                        "WorkBook/SaxHandler or profile_sheet, or set it to 0");
       throw_error(ErrorCode::LimitExceeded,
-                  "DOM limits exceeded; the DOM materialises every cell, so prefer "
-                  "WorkBook/SaxHandler or profile_sheet for large sheets, or pass "
-                  "DomOptions{} for no limit");
+                  "DOM memory limit exceeded (" + std::to_string(byte_limit) +
+                      " bytes); raise DomOptions::max_bytes, prefer WorkBook/"
+                      "SaxHandler or profile_sheet, or set it to 0");
     }
     ++*cells_;
     *bytes_ += bytes;
@@ -123,6 +137,11 @@ DomWorkBook DomWorkBook::load(const std::filesystem::path& path, const DomOption
   DomWorkBook result;
   result.impl_ = std::move(impl);
   return result;
+}
+
+Result<DomWorkBook> DomWorkBook::try_load(const std::filesystem::path& path,
+                                          const DomOptions& options) {
+  return detail::capture_result([&] { return DomWorkBook::load(path, options); });
 }
 
 const std::vector<DomWorkSheet>& DomWorkBook::sheets() const noexcept { return impl_->sheets; }

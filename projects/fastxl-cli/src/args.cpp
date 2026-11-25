@@ -152,6 +152,22 @@ Args parse_args(const std::vector<std::string>& argv) {
       uint64_t parsed = parse_uint(name, take_value());
       if (parsed == 0 || parsed > (1u << 20)) throw UsageError("--max-cell-bytes must be 1..1048576");
       args.max_cell_bytes = static_cast<size_t>(parsed);
+    } else if (name == "--query") {
+      args.query = take_value();
+    } else if (name == "--regex") {
+      args.regex = true;
+    } else if (name == "--case-sensitive") {
+      args.case_sensitive = true;
+    } else if (name == "--context") {
+      uint64_t parsed = parse_uint(name, take_value());
+      if (parsed > 10) throw UsageError("--context must be 0..10");
+      args.context = static_cast<uint32_t>(parsed);
+    } else if (name == "--max-hits") {
+      args.max_hits = static_cast<size_t>(parse_uint(name, take_value()));
+    } else if (name == "--regions") {
+      args.regions = true;
+    } else if (name == "--max-bytes") {
+      args.max_bytes = static_cast<size_t>(parse_uint(name, take_value()));
     } else if (name == "--limit") {
       args.limit = static_cast<size_t>(parse_uint(name, take_value()));
     } else if (name == "--sheet-name") {
@@ -215,6 +231,8 @@ std::string usage_text() {
       "  fastxl-cli preview <file> [--sheet ...] [--header-row N|auto|--no-header]\n"
       "                          [--rows N] [--range A1:F20] [--columns 1,3-5]\n"
       "                          [--max-cell-bytes N] [--format text|table|jsonl]\n"
+      "  fastxl-cli search <file> --query TEXT [--regex|--case-sensitive] [--context N]\n"
+      "                          [--max-hits N] [--sheet ...] [--format jsonl]\n"
       "  fastxl-cli convert <input|-> --out <output|-> [--from xlsx|csv|jsonl] [--to ...]\n"
       "                          [--sheet ...] [--header-row N|--no-header] [--delimiter C]\n"
       "                          [--infer|--no-infer] [--normalize] [--fill-gaps]\n"

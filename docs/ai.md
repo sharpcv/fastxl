@@ -5,7 +5,7 @@ value has a canonical text form, and every table can be rebuilt from CSV/JSONL.
 
 ## Probing
 
-Four commands, increasing cost. `--sheet` takes a sheet name or a 1-based
+Five commands, increasing cost. `--sheet` takes a sheet name or a 1-based
 index; JSON `sheet_index` values are 0-based.
 
 ```sh
@@ -20,6 +20,9 @@ fastxl-cli probe book.xlsx --format jsonl [--sheet Data] [--jobs 4] [--max-rows 
 
 # Column schema for code generation: name, inferred type, nullability, stats.
 fastxl-cli schema book.xlsx --format jsonl [--sheet Data] [--header-row auto] [--max-rows N] [--top N]
+
+# Find text/formulas across sheets; A1 hits plus a context window.
+fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl
 ```
 
 The CLI is human-readable by default (`text`, which is an aligned table for
@@ -107,25 +110,64 @@ is still row 1.
 ```
 
 Each sheet section also reports `max_col`, `empty_rows`, `ragged_rows`,
-`merged_ranges`, `error_cells`, `has_formulas`, `parallel`, `used_range`,
-`auto_filter`, `pane_top_row` and `hidden_columns`. `rows_scanned` counts data
-records examined and excludes header rows. `data_rows` is `rows_scanned` plus
-blank rows inside the data region, so it matches the null denominators.
-`empty_rows` counts blank CSV lines and xlsx rows that have no cells (including
-row numbers missing from the sheet XML). CSV `--header-row N` and emitted row
-numbers are **physical file lines**: blank lines advance the counter but are not
-emitted, and an embedded newline inside a quoted field advances the following
-row number. xlsx row numbers are sheet rows. `--max-rows` limits data rows for
-xlsx, csv and jsonl alike. `flags` can include `unique` (non-null, not capped,
-distinct equals non-null), `mixed_types`, `constant`, `mostly_null`,
+`merged_ranges`, `merged_cells`, `hidden_rows`, `filter_columns`,
+`uncached_formulas`, `formula_links`, `error_cells`, `has_formulas`, `parallel`,
+`used_range`, `auto_filter`, `pane_top_row` and `hidden_columns`, plus the
+workbook anchors `tables`, `comments`, `pivot_tables` and `charts`. `merged_cells`
+holds concrete A1 ranges (`A1:D1`, `A3:A10`); `formula_links` maps a formula cell
+to its cross-sheet references (`{sheet, ref}`), and columns with formulas carry
+`formula_cells > 0` so input and derived columns can be told apart.
+`num_fmt` (the most frequent non-`General` format code) and `style_flags`
+(`strike`, `fill`, `font_color`) expose visual formatting that matters for
+business semantics, such as voided rows marked with red or strike. `rows_scanned`
+counts data records examined and excludes header rows. `data_rows` is
+`rows_scanned` plus blank rows inside the data region, so it matches the null
+denominators. `empty_rows` counts blank CSV lines and xlsx rows that have no cells
+(including row numbers missing from the sheet XML). CSV `--header-row N` and
+emitted row numbers are **physical file lines**: blank lines advance the counter
+but are not emitted, and an embedded newline inside a quoted field advances the
+following row number. xlsx row numbers are sheet rows. `--max-rows` limits data
+rows for xlsx, csv and jsonl alike. `flags` can include `unique` (non-null, not
+capped, distinct equals non-null), `mixed_types`, `constant`, `mostly_null`,
 `duplicate_header`, `empty_header`, `whitespace_edges`, `blank_like_text`,
 `has_error` and `has_formula`.
 
 A formula cell with no cached value (`<f>...</f><v/>`, common in files written
 by openpyxl or ETL tools) is reported as a `null` cell with the `has_formula`
-flag and `has_formulas: true`, so it is visible to probes instead of silently
+flag and `has_formulas: true`, counted in `uncached_formulas`, and previewed with
+`needs_recalc: true`, so it is visible to probes instead of silently
 disappearing. `convert` still drops the formula itself (values only), but the
 workbook summary counts it.
+
+Sheet-level anchors come from real OOXML parts: `tables` from
+`xl/tables/table*.xml` (structured table boundaries and column names),
+`comments` from `xl/comments*.xml` (capped at 50 items with `count` carrying the
+true total), `pivot_tables` with the resolved cache source (`source_sheet`,
+`source_ref`), `charts` with their formula references, and workbook-level
+`defined_names` (named ranges). `info` reports `tables`, `comments_count`,
+`pivot_tables_count` and `charts_count` per sheet as well.
+
+`probe --regions` and `schema --regions` split a sheet into data islands
+(contiguous column runs separated by blank rows; merged titles extend a band's
+column span) and profile each island with its own bounds. Every region object
+carries `range` and omits workbook-level `tables`/`comments`/`pivot_tables`/
+`charts`. With `--header-row auto`, each region detects its own header; otherwise
+the requested header row is used only when it lies inside the region, and the
+region is headerless when it does not.
+
+`schema` also emits `join_keys`: same-name column pairs across sheets (ASCII
+trim + case-insensitive) and, when both columns have `top_values`, a
+`value_overlap` hint with `overlap = |intersection| / min(left_top, right_top)`.
+Hints are capped at 50 and never claim a relationship on a constant or empty
+column.
+
+`search --query TEXT` scans every worksheet (or `--sheet`), case-insensitive by
+default with ASCII folding, and matches formula text when the cached text does
+not match. Hits carry `sheet`, `ref`, `row`, `col`, `type`, `field`
+(`text`/`formula`), `text`, and an optional `context` window of up to 25 cells.
+`--regex` switches to ECMAScript patterns; `--context 0` enables the low-cost
+keyword channel, which skips rendering numeric/date cells unless the query parses
+as a number.
 
 `type` is one of `null`, `integer`, `number`, `text`, `boolean`, `error`,
 `date`, `datetime`, `time`, `mixed`, `invalid`. `integer` means every numeric
@@ -136,8 +178,9 @@ in xlsx, CSV and JSONL. `distinct_capped` warns that cardinality was truncated
 at `--distinct-cap` (default 10000); `samples` are truncated to 128 bytes and
 `--sample` entries. `top_values` is a bounded frequency list (`--top N`, default
 5); when `distinct_capped` is true it reflects the first 10000 distinct values,
-not the whole column. `enum_values` comes from inline data-validation list
-formulas (`"a,b,c"`); range-based validation formulas are not resolved.
+not the whole column. `enum_values` comes from inline data-validation lists
+(`"a,b,c"`) and from same-workbook range references such as
+`=Dict!$A$2:$A$20`; `enum_values_truncated` flags a list cut at 64 values.
 
 For CSV/JSONL, `schema` uses the same JSON with `"format": "csv"` and one
 section named `table` (or `--sheet`).
@@ -187,7 +230,8 @@ uses only the Python standard library and shells out to `fastxl-cli`:
 python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli   # .exe on Windows
 ```
 
-Tools: `fastxl_info`, `fastxl_preview`, `fastxl_schema`, `fastxl_probe`. Tool
+Tools: `fastxl_info`, `fastxl_preview`, `fastxl_schema`, `fastxl_probe`,
+`fastxl_search`. Tool
 results are the same JSON objects documented here; CLI failures become
 `isError: true` with the structured error text.
 
@@ -251,6 +295,14 @@ sheet.write_row(2, row);
 writer.commit(); // atomic replace
 ```
 
+`CellView::formula` text is written as `<f>`; a `Null` formula cell gets no
+cached `<v>` and readers mark it `needs_recalc`. Register custom number
+formats, bold/italic/strike, font colors and solid fills with
+`writer.register_style(fastxl::CellStyle{...})`, then pass the returned ids as
+the fourth `write_row` argument. For many sheets, `BookWriteOptions::parallel`
+compresses per-sheet buffers concurrently after each pre-opened handle is
+written by one thread.
+
 `convert` from JSONL keeps `true`/`false` as booleans, JSON numbers as
 numbers, and ISO strings stay text (they are not re-typed). To build typed
 date/boolean columns from CSV, either pre-type through the API or accept the
@@ -266,14 +318,16 @@ See [limitations.md](limitations.md) for the full list. For AI use specifically:
   whole file is written. Use csv/jsonl for true streaming.
 - No code-generation command: `schema` gives the data, the CLI/API gives the
   writer; a generator is not built in.
-- Schema inference is statistical per column; it does not detect units,
-  range/foreign-key relationships or enums that are not inline validation
-  lists. `unique` is the only key signal.
+- Schema inference is statistical per column; it does not prove foreign keys.
+  `join_keys` gives same-name/value-overlap hints, and `unique`, `top_values`
+  and `enum_values` (including resolved validation ranges such as
+  `=Dict!$A$2:$A$20`) are the available key/domain signals.
 - Header auto-detection is heuristic. It uses frozen panes and a text-to-typed
   transition; a title row followed by an all-text table is not detected. Check
   `header_candidates` from `preview`.
-- `preview` stops at the requested row range; for a range far down the sheet it
-  still reads the skipped rows.
+- `preview` reads the whole xlsx worksheet part even when `--range` starts far
+  down the sheet, because metadata after `sheetData` must be collected; CSV and
+  JSONL still stop after the requested range.
 - `probe`, `schema` and `preview` accept stdin (`-`) only with `--from`; stdin is
   spooled to a temporary file, so disk use equals the input size.
 - `convert` from CSV/JSONL writes a single sheet; xlsx-to-xlsx copies every

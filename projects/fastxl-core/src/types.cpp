@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 
 #include "fastxl/error.hpp"
+#include "simd_scan.hpp"
 #include "utf8.hpp"
 
 namespace fastxl {
@@ -239,6 +240,83 @@ void append_time(std::string& out, double seconds) {
 
 } // namespace
 
+namespace {
+
+constexpr uint32_t kMaxRowRef = 1048576;
+constexpr uint32_t kMaxColRef = 16384;
+
+} // namespace
+
+std::string column_letters(uint32_t col) {
+  std::string letters;
+  while (col > 0) {
+    const uint32_t remainder = (col - 1) % 26;
+    letters.push_back(static_cast<char>('A' + remainder));
+    col = (col - 1) / 26;
+  }
+  std::reverse(letters.begin(), letters.end());
+  return letters;
+}
+
+std::string cell_ref(uint32_t row, uint32_t col) {
+  return column_letters(col) + std::to_string(row);
+}
+
+std::string range_ref(const MergeRange& range) {
+  std::string out = cell_ref(range.first_row, range.first_col);
+  out.push_back(':');
+  out += cell_ref(range.last_row, range.last_col);
+  return out;
+}
+
+bool parse_cell_ref(std::string_view text, uint32_t* row, uint32_t* col) {
+  size_t i = 0;
+  if (i < text.size() && text[i] == '$') ++i;
+  uint32_t column = 0;
+  size_t letters = 0;
+  while (i < text.size() &&
+         ((text[i] >= 'A' && text[i] <= 'Z') || (text[i] >= 'a' && text[i] <= 'z'))) {
+    const char c = text[i];
+    const uint32_t digit = static_cast<uint32_t>((c >= 'a' ? c - 'a' : c - 'A') + 1);
+    if (column > (kMaxColRef - digit) / 26) return false;
+    column = column * 26 + digit;
+    ++i;
+    ++letters;
+  }
+  if (letters == 0) return false;
+  if (i < text.size() && text[i] == '$') ++i;
+  uint64_t number = 0;
+  size_t digits = 0;
+  while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+    number = number * 10 + static_cast<uint64_t>(text[i] - '0');
+    if (number > kMaxRowRef) return false;
+    ++i;
+    ++digits;
+  }
+  if (digits == 0 || number == 0 || i != text.size()) return false;
+  *row = static_cast<uint32_t>(number);
+  *col = column;
+  return true;
+}
+
+bool parse_range_ref(std::string_view text, MergeRange* range) {
+  const size_t colon = text.find(':');
+  uint32_t r1 = 0, c1 = 0, r2 = 0, c2 = 0;
+  if (colon == std::string_view::npos) {
+    if (!parse_cell_ref(text, &r1, &c1)) return false;
+    r2 = r1;
+    c2 = c1;
+  } else {
+    if (!parse_cell_ref(text.substr(0, colon), &r1, &c1)) return false;
+    if (!parse_cell_ref(text.substr(colon + 1), &r2, &c2)) return false;
+  }
+  range->first_row = r1;
+  range->first_col = c1;
+  range->last_row = r2;
+  range->last_col = c2;
+  return true;
+}
+
 std::string_view to_string(CellType type) noexcept {
   switch (type) {
   case CellType::Number: return "number";
@@ -265,6 +343,8 @@ std::string_view to_string(Format format) noexcept {
   }
   return "auto";
 }
+
+std::string_view simd_backend() noexcept { return detail::simd::backend(); }
 
 namespace {
 

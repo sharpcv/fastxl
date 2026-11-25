@@ -74,6 +74,30 @@ struct MergeRange {
   uint32_t last_col = 0;
 };
 
+// A1 helpers shared by the CLI, the bindings and the parsers. Rows and columns
+// are 1-based; parse_cell_ref accepts optional '$' anchors and either case for
+// the column letters.
+std::string column_letters(uint32_t col);
+std::string cell_ref(uint32_t row, uint32_t col);
+std::string range_ref(const MergeRange& range);
+bool parse_cell_ref(std::string_view text, uint32_t* row, uint32_t* col);
+bool parse_range_ref(std::string_view text, MergeRange* range);
+
+// Visual cell formatting resolved from cellXfs. `font_color`/`fill_color` are
+// 0xRRGGBB and only meaningful when the corresponding flag is set.
+struct CellStyleFlags {
+  uint32_t font_color = 0;
+  uint32_t fill_color = 0;
+  bool has_font_color = false;
+  bool has_fill = false;
+  bool strike = false;
+};
+
+struct CellStyleInfo {
+  std::string_view num_fmt; // borrowed from SheetStyle
+  CellStyleFlags flags;
+};
+
 // Owned value helper. It owns text and can be converted to a borrowed CellView;
 // it is not a second row unit, only a convenient way to build scalar payloads.
 struct Value {
@@ -112,6 +136,9 @@ std::string_view to_text(const CellView& cell, std::string& scratch);
 
 std::string_view to_string(CellType) noexcept;
 std::string_view to_string(Format) noexcept;
+
+// Active XML scan backend: "avx2", "neon", "sse2" or "scalar".
+std::string_view simd_backend() noexcept;
 
 // Unknown names map to Format::Auto.
 Format format_from_string(std::string_view) noexcept;

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "error.hpp"
 #include "sax.hpp"
 #include "types.hpp"
 #include "workbook.hpp"
@@ -78,6 +79,8 @@ public:
   virtual std::span<const std::string_view> columns() const noexcept = 0;
   // Effective header row; 0 = no header (JSONL is always 0).
   virtual uint32_t header_row() const noexcept = 0;
+  // xlsx: the workbook stylesheet; nullptr for formats without cell styles.
+  virtual const SheetStyle* styles() const noexcept { return nullptr; }
   virtual bool next(RowView& row) = 0;
   virtual uint64_t rows_read() const noexcept = 0;
   virtual uint64_t extra_cells() const noexcept = 0;
@@ -102,6 +105,12 @@ std::unique_ptr<Reader> open_reader(const std::filesystem::path&, const ReadOpti
 std::unique_ptr<Writer> open_writer(const std::filesystem::path&,
                                     std::span<const std::string_view> columns,
                                     const WriteOptions& = {});
+// Non-throwing boundary adapters.
+Result<std::unique_ptr<Reader>> try_open_reader(const std::filesystem::path&,
+                                                const ReadOptions& = {});
+Result<std::unique_ptr<Writer>> try_open_writer(const std::filesystem::path&,
+                                                std::span<const std::string_view> columns,
+                                                const WriteOptions& = {});
 // xlsx streams are spooled through a temporary file.
 std::unique_ptr<Reader> open_reader(std::istream&, Format, const ReadOptions& = {});
 std::unique_ptr<Writer> open_writer(std::ostream&, Format,

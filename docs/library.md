@@ -43,9 +43,9 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 
 **非目标**
 
-- 不计算公式。读取缓存值，写入时丢弃公式。
+- 不计算公式。读取缓存值；写入时保留公式文本，不生成缓存值。
 - 不支持旧版 `.xls`（CFB）、加密工作簿、ODS、Parquet。
-- 不实现完整 Excel 样式系统：颜色、边框、图片、图表、批注、数据透视表等不写入。
+- 不实现完整 Excel 样式系统：写入仅支持数字格式、粗体/斜体/删除线、字体色和纯色填充；边框、对齐、图片、图表、批注、数据透视表不写入。
 - CSV/JSONL 只处理 UTF-8。
 
 ---
@@ -226,9 +226,14 @@ fastxl::WorkBook book = fastxl::WorkBook::open("book.xlsx", options);
 |---|---|---|---|
 | `shared_strings` | `SharedStringMode` | `Load` | `Load` 加载文本；`Count` 只计数；`Skip` 完全跳过。读取单元格文本时必须用 `Load` |
 | `max_shared_strings_bytes` | `size_t` | 512 MiB | `Load` 时共享字符串总字节上限，超出抛 `SharedStringsTooLarge` |
-| `in_memory_threshold` | `size_t` | 64 MiB | part 解压后不超过此值时整块缓冲；更大时流式解析。并行 profile 只对缓冲 part 生效 |
+| `in_memory_threshold` | `size_t` | 64 MiB | part 解压后不超过此值时整块缓冲；更大时流式解析。并行 profile 对缓冲与流式 part 都生效 |
 | `max_metadata_bytes` | `size_t` | 256 MiB | workbook/rels/styles 等元数据 part 的上限 |
 | `lenient` | `bool` | `true` | 宽松处理非法单元格引用/值（记录 `CellIssue`）；XML 结构错误仍然抛 `MalformedXml` |
+| `memory_map` | `bool` | `true` | 只读映射整个 ZIP；STORE 类型的 sheet 直接从映射解析（零拷贝），每个 reader 仍使用独立 minizip 句柄。映射失败或文件 >2 GiB 时自动回退到文件 API |
+
+XLSX 解析的 XML 扫描使用运行时选择的 SIMD 后端：x86_64 上 AVX2（不可用时回退 SSE2），
+AArch64 上 NEON，其他平台标量实现。`fastxl::simd_backend()` 返回当前后端，CLI 的
+`--version` 也会打印。
 
 `SharedStringMode`：
 
@@ -398,8 +403,22 @@ CellView(uint32_t column, CellView value) // 复制值并设置 col
 | `is_date(xf)` | `uint32_t xf` | `bool` | 该样式是否日期 |
 | `is_datetime(xf)` | `uint32_t xf` | `bool` | 该样式是否日期时间 |
 | `is_time(xf)` | `uint32_t xf` | `bool` | 该样式是否时间 |
+| `info(xf)` | `uint32_t xf` | `CellStyleInfo` | 数字格式串 + `CellStyleFlags`（`strike`、`has_fill`、`fill_color`、`has_font_color`、`font_color`） |
 
 读取时 `CellView::format` 不填具体格式，使用 `style` + `SheetStyle` 判断。
+`CellStyleInfo::num_fmt` 借用自 `SheetStyle`；颜色为 `0xRRGGBB`，`theme`/`indexed`
+颜色不解析。未知 `xf` 返回空结构。
+
+`WorkBook` 还会在打开时解析并缓存工作簿锚点（全部只读）：
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `defined_names()` | `std::span<const DefinedName>` | 命名区域（上限 1024） |
+| `defined_names_truncated()` | `bool` | 是否因上限被截断 |
+| `sheet_metadata(index)` | `const SheetMetadata&` | 该表的 `tables`（结构化表及列名）、`comments`（上限 50，`comments_total` 为真实总数）、`pivot_tables`（含 `source_sheet`/`source_ref`）、`charts`（含公式引用） |
+
+`SheetMetadata` 中 `comments_total`、`pivot_tables_total`、`charts_total` 是截断前
+的真实数量；缺失 part 会被跳过，损坏的 XML 仍按严格策略抛 `MalformedXml`。
 
 ---
 
@@ -418,6 +437,10 @@ fastxl::DomWorkBook book = fastxl::DomWorkBook::load("small.xlsx", options);
 |---|---|---|
 | `max_cells` | 0（不限） | 所有表累计单元格上限，超出抛 `LimitExceeded` |
 | `max_bytes` | 0（不限） | 估算内存上限：`text + formula + sizeof(Cell) + 32` 每格 |
+| `max_memory_bytes` | 1 GiB | 默认 DOM 内存安全阈值；0 关闭。与 `max_bytes` 同时设置时取较小的非零值 |
+
+超限错误会指明实际生效的字段（`DomOptions::max_memory_bytes` 或 `max_bytes`）。
+`max_cells` 仍是独立开关，默认不限制。
 
 `DomWorkBook`：
 
@@ -553,8 +576,11 @@ auto writer = fastxl::open_writer("out.xlsx", reader->columns(), write_options);
 | `strings` | `StringStorage` | `Shared` | `Shared` 去重共享字符串；`Inline` 全部内联 |
 | `max_shared_strings_bytes` | `size_t` | 512 MiB | 共享字符串内存上限；超出后新字符串回退为内联 |
 | `fsync` | `bool` | true | 提交前 fsync |
-| `compression_level` | `int` | 6 | ZIP 压缩 0..9 |
+| `compression_level` | `int` | 6 | ZIP 压缩 0..9；0 为 STORE |
 | `temp_dir` | `optional<path>` | 空 | 临时目录；必须与目标同卷 |
+| `parallel` | `bool` | false | 每张表独立缓冲 XML，提交时并行压缩 |
+| `jobs` | `unsigned` | 0 | 并行压缩线程数；0=硬件并发（上限 8） |
+| `max_sheet_buffer_bytes` | `size_t` | 64 MiB | 单表 XML/压缩缓冲超过此值后溢写到临时文件 |
 
 `StringStorage`：`Shared` / `Inline`。
 
@@ -571,11 +597,20 @@ writer.commit();
 | 方法 | 参数 | 说明 |
 |---|---|---|
 | `create(target, sheet_names, options)` | 路径、名称 span、`BookWriteOptions` | 名称需非空、≤31 个 UTF-16 单元、唯一、不含 `[]:*?/\\`、不以 `'` 开头/结尾、不能是保留名 `History` |
-| `sheet(index)` | `size_t index` | 必须按 0,1,2… 顺序打开；返回可写句柄 |
-| `commit()` | — | 关闭所有未完成的表、写 sharedStrings、关闭 ZIP、原子替换 |
+| `sheet(index)` | `size_t index` | `parallel=false` 时必须按 0,1,2… 顺序打开；`parallel=true` 时可在写线程池前打开任意表 |
+| `register_style(style)` | `CellStyle` | 注册自定义样式，返回从 18 开始的 id；必须在写行/开线程前调用 |
+| `style_count()` | — | 已注册的自定义样式数 |
+| `commit()` | — | 关闭所有未完成的表、写 styles/sharedStrings、关闭 ZIP、原子替换 |
 | `abort()` | — | 丢弃临时文件；可重复调用 |
 
-`WorkBookWriter` 是 move-only。`commit()` 会自动完成尚未打开的表。
+`WorkBookWriter` 是 move-only，对象本身不是线程安全的。`parallel=true` 时：
+
+1. 在主线程对每个索引调用 `sheet(i)`，取得句柄；
+2. 每个 `WorkSheetWriter` 只由一个线程使用；
+3. 所有线程结束后在主线程调用 `commit()`。
+
+各表的 XML 独立缓冲，超过 `max_sheet_buffer_bytes` 后溢写到 `temp_dir`；提交时并行压缩，
+仍按工作表索引顺序写入 ZIP。`commit()` 会自动完成尚未写入的表。
 
 ### 7.3 `WorkSheetWriter`
 
@@ -585,7 +620,7 @@ writer.commit();
 | `set_freeze_rows(rows)` | `rows` 0..1048576 | 冻结前 N 行；0 取消 |
 | `set_auto_filter(enable)` | `bool` | 是否写 `autoFilter` |
 | `merge_cells(range)` | `MergeRange`，1-based 闭区间 | 合并范围不能越界或重叠 |
-| `write_row(row, cells, options)` | `row` 严格递增，从 1 开始；`cells` 按 col 递增；`RowOptions` | 写入一行；空单元格可省略 |
+| `write_row(row, cells, options, style_ids)` | `row` 严格递增，从 1 开始；`cells` 按 col 递增；`RowOptions`；可选每单元格样式 id | 写入一行；空单元格可省略 |
 
 `RowOptions`：
 
@@ -601,11 +636,15 @@ writer.commit();
 - 文本超过 32767 个 UTF-16 单元抛 `LimitExceeded`。
 - 非有限浮点（NaN/Inf）抛 `InvalidValue`。
 - 文本必须是合法 UTF-8，否则抛 `InvalidUtf8`。
-- 公式文本不会写入；`CellView::formula` 仅作为读取信息。
+- `style_ids` 非空时必须与 `cells` 等长；非 0 值覆盖自动推导样式，并忽略
+  `RowOptions::bold`；未注册 id 抛 `InvalidValue`。
+- `cell.has_formula && !cell.formula.empty()` 时写入 `<f>` 公式文本；公式单元格
+  的缓存值按原类型写入。`Null`/`Invalid` 公式单元格只写 `<f>`，没有 `<v>`，读取方
+  会标记 `needs_recalc`。
 
 ### 7.4 样式与数字格式
 
-写入器的样式表固定 18 个 `cellXfs`：9 种数字格式 + 对应粗体。`CellView::format`
+写入器始终保留 18 个基础 `cellXfs`：9 种数字格式 + 对应粗体。`CellView::format`
 使用 `NumberFormat`：
 
 | `NumberFormat` | 写入样式 | 显示 |
@@ -621,7 +660,33 @@ writer.commit();
 | `Text` | 8 | 文本 |
 
 `CellType::Date/DateTime/Time` 会自动使用对应样式；`Number`/`Int` 使用
-`CellView::format`。样式索引 ≥9 会回退到 `General`。
+`CellView::format`。样式索引 ≥9 会回退到 `General`；`RowOptions::bold` 在推导
+样式上再加 9。
+
+自定义样式通过 `register_style` 注册，id 从 18 开始：
+
+```cpp
+fastxl::CellStyle header;
+header.bold = true;
+header.font_color = 0xFFFFFF;
+header.fill_color = 0x1F4E78;
+const uint32_t header_style = writer.register_style(header);
+
+fastxl::CellStyle money;
+money.num_fmt = "¥#,##0.00";
+const uint32_t money_style = writer.register_style(money);
+```
+
+`CellStyle` 字段：`num_fmt`（空=General）、`bold`、`italic`、`strike`、
+`font_color`/`fill_color`（`0xRRGGBB`）。提交时动态生成 `styles.xml`：
+
+- 数字格式复用基础 id 164/165（`yyyy-mm-dd`/`yyyy-mm-dd hh:mm:ss`），其余自定义
+  格式去重后从 166 开始分配；
+- 字体组合（粗体/斜体/删除线/颜色）和纯色填充去重；
+- 每个注册样式生成一个 `cellXfs` 项，按需设置 `applyNumberFormat`/`applyFont`/
+  `applyFill`。
+
+样式无边框、对齐、条件格式或图片；`num_fmt` 原样写入，必须是合法 Excel 格式代码。
 
 ---
 
@@ -636,24 +701,33 @@ writer.commit();
 | `distinct_cap` | `size_t` | 10000 | 每列 distinct/频率映射上限；0 表示不做 distinct |
 | `samples` | `size_t` | 5 | 每列 sample 数；0 关闭 |
 | `top_values` | `size_t` | 5 | 每列高频值数；0 关闭 |
-| `jobs` | `unsigned` | 0 | 0=硬件并发（上限 8）；1=串行；>1=缓冲 part 上并行 |
+| `jobs` | `unsigned` | 0 | 0=硬件并发（上限 8）；1=串行；>1=按行切片并行（缓冲或流式） |
 
-并行条件：`jobs>1`、`max_rows==0`、工作表 part ≤ `in_memory_threshold`。否则自动串行，
-`SheetProfile::parallel` 为 false。
+并行条件：`jobs>1` 且 `max_rows==0`。≤ `in_memory_threshold` 的 part 整体缓冲后按行分片；
+更大的 part 走“解压生产者 + 行分片队列 + 多解析线程”的流式流水线。两条路径的计数、类型、
+distinct、samples 与 flags 与 `jobs=1` 一致（`sum`/`mean` 仅可能有末位差异）。
+`max_rows != 0` 或 `jobs==1` 时串行，`SheetProfile::parallel` 为 false。
 
-### 8.2 `profile_sheet` / `profile_table`
+### 8.2 `profile_sheet` / `profile_sheets` / `profile_table`
 
 ```cpp
 SheetProfile p = profile_sheet(book, 0, options);
-SheetProfile t = profile_table(*reader, options);
+std::vector<SheetProfile> all = profile_sheets(book, indices, options);
+std::vector<SheetProfile> t = profile_sheets(book, indices, per_sheet_options);
+SheetProfile table = profile_table(*reader, options);
 ```
 
 | 参数 | 含义 |
 |---|---|
 | `book` | 已打开的 `WorkBook`；应使用默认 `SharedStringMode::Load` |
 | `sheet` | 0-based 工作表索引；越界抛 `InvalidSheetRef` |
-| `options` | 见上 |
+| `sheets` | 要并发的表索引列表；结果顺序与请求一致 |
+| `options` | 见上；`profile_sheets` 的第二个重载要求每个表一个 `ProfileOptions` |
 | `reader` | 任意表格式 `Reader`；`profile_table` 串行 |
+
+`profile_sheets` 最多启动 `jobs` 个线程（按每个表 options 的最大值），每个表内部强制
+`jobs=1`，避免线程池嵌套；首个异常在全部线程结束后重新抛出。单表请求直接委托
+`profile_sheet`，保留行级并行。
 
 `profile_table` 使用 reader 的 `columns()` 作为表头名，`header_row()` 作为表头行；
 `--max-rows` 语义与 `profile_sheet` 一致。
@@ -852,6 +926,36 @@ try {
 }
 ```
 
+边界层另提供 `std::error_code` 与 `Result<T>` 适配器（内部仍使用异常）：
+
+```cpp
+fastxl::ErrorCode code = fastxl::ErrorCode::FileNotFound;
+std::error_code ec = fastxl::make_error_code(code); // category "fastxl"
+
+auto book = fastxl::WorkBook::try_open("book.xlsx");
+if (!book) {
+  fastxl::ErrorCode c = book.error().code;
+  std::error_code ec2 = book.code();
+} else {
+  fastxl::WorkBook& value = book.value();
+}
+```
+
+可用入口：`WorkBook::try_open`、`DomWorkBook::try_load`、`WorkBookWriter::try_create`、
+`try_open_reader`、`try_open_writer`、`try_profile_sheet`、`try_profile_table`。
+`Result<T>::value()/take()` 在持有错误时仍抛 `Exception`。
+
+行迭代（C++20 Input Range，单遍；`WorkBook` 必须比 range 活得更久）：
+
+```cpp
+for (auto&& row : book.sheet(0).rows()) {
+  for (const fastxl::CellView& cell : row) { /* owned copy per row */ }
+}
+```
+
+`RowRange` 用有界队列在后台线程读取；`begin()` 只能成功启动一次，提前 `break`
+会在 range 析构时停止生产者。`RowRange` 也满足 `std::ranges::input_range`。
+
 `ErrorCode`：
 
 | 值 | 典型原因 |
@@ -913,9 +1017,11 @@ CLI 退出码：
 
 **线程**
 
-- `WorkBook` 只读，但同一时刻只允许一个活动 `WorkSheetReader`（`open_sheet` 会检查）。
+- `WorkBook` 只读，可同时打开多个 `WorkSheetReader`；每个 reader 持有独立解压流，
+  共享字符串与样式表在打开后不可变。
 - `read_sheet`/`WorkSheet::read` 是同步调用；并行 profile 在库内部开线程。
-- `WorkBookWriter` 不是线程安全的；单线程写入。
+- `WorkBookWriter` 对象本身不是线程安全的；`BookWriteOptions::parallel` 只允许
+  每个已预先打开的 `WorkSheetWriter` 由一个线程使用，`commit()` 仍在调用线程执行。
 - `DomWorkBook` 通过 `shared_ptr` 持有数据，读取是 const。
 
 **内存**
@@ -934,7 +1040,8 @@ CLI 退出码：
 - XLSX 读取：值、共享字符串、日期样式、合并、冻结窗格、自动筛选、超链接、
   数据验证（type/sqref/formula1/formula2）、行列隐藏/宽度/高度、公式文本。
 - XLSX 写入：单/多工作表、共享字符串去重、ZIP64、冻结行、自动筛选、合并、
-  18 个固定样式。
+  公式文本、18 个基础样式、自定义数字格式/粗斜体/删除线/字体色/纯色填充、
+  并行压缩。
 - CSV：多行字段、BOM、可配置分隔符、类型推断、列投影、CRLF。
 - JSONL：每行一个对象，嵌套值保持紧凑 JSON 文本。
 - 表格式互转；stdin/stdout；原子写入。
@@ -942,13 +1049,14 @@ CLI 退出码：
 **不支持/限制**
 
 - 无 `.xls`/CFB、加密、ODS、Parquet、bzip2/lzma/zstd ZIP。
-- 不计算公式；写入丢弃公式。
-- 样式固定：无自定义颜色、边框、字体、图片、图表、批注、透视表、条件格式。
+- 不计算公式；写入保留公式文本但不生成缓存值。
+- 写入样式仅覆盖数字格式、粗斜体、删除线、字体色和纯色填充；无边框、对齐、
+  图片、图表、批注、透视表、条件格式。
 - 数据验证只暴露 type/sqref/formula；不解析区域/跨表引用。
-- 并行 profile 只在缓冲 part 上生效；流式 part 串行。
+- 并行 profile 对缓冲与流式 part 均生效；流式分片队列有界。
 - CSV/JSONL 只支持 UTF-8。
 - 文本日期只识别 ISO 8601。
-- DOM 无默认上限，但大表会占大量内存。
+- DOM 默认上限 1 GiB；大表仍应使用 SAX/Profile。
 
 ---
 

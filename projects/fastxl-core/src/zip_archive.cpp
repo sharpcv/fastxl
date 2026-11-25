@@ -56,6 +56,7 @@ void fill_info(const mz_zip_file* source, ZipEntryInfo* target) {
   target->name = source->filename ? source->filename : "";
   target->uncompressed_size = static_cast<uint64_t>(source->uncompressed_size);
   target->compressed_size = static_cast<uint64_t>(source->compressed_size);
+  target->local_header_offset = static_cast<uint64_t>(source->disk_offset);
   target->method = source->compression_method;
   target->flags = source->flag;
 }
@@ -64,6 +65,40 @@ void fill_info(const mz_zip_file* source, ZipEntryInfo* target) {
   throw_error(ErrorCode::ZipReadError,
               std::string(what) + " for entry '" + name + "' (mz code " + std::to_string(code) +
                   ")");
+}
+
+// Owns one minizip reader for the lifetime of one operation.
+class ReaderHandle {
+public:
+  ReaderHandle() = default;
+  ~ReaderHandle() { reset(); }
+  ReaderHandle(const ReaderHandle&) = delete;
+  ReaderHandle& operator=(const ReaderHandle&) = delete;
+
+  void create() {
+    reader_ = mz_zip_reader_create();
+    if (!reader_) throw_error(ErrorCode::Internal, "cannot allocate zip reader");
+  }
+
+  void* get() const noexcept { return reader_; }
+
+  void reset() noexcept {
+    if (reader_) {
+      mz_zip_reader_close(reader_);
+      mz_zip_reader_delete(&reader_);
+      reader_ = nullptr;
+    }
+  }
+
+private:
+  void* reader_ = nullptr;
+};
+
+void open_entry_on(void* reader, const std::string& name) {
+  int32_t status = mz_zip_reader_locate_entry(reader, name.c_str(), 0);
+  if (status != MZ_OK) throw_zip_error("cannot locate", name, status);
+  status = mz_zip_reader_entry_open(reader);
+  if (status != MZ_OK) throw_zip_error("cannot open entry", name, status);
 }
 
 } // namespace
@@ -93,32 +128,41 @@ size_t ZipEntryStream::read(void* dst, size_t size) {
 
 // --------------------------------------------------------------------- ZipArchive
 
-ZipArchive::~ZipArchive() {
-  if (reader_) {
-    mz_zip_reader_close(reader_);
-    mz_zip_reader_delete(&reader_);
-  }
-}
+ZipArchive::~ZipArchive() = default;
 
 ZipArchive::ZipArchive(ZipArchive&& other) noexcept
-    : reader_(other.reader_), path_(std::move(other.path_)) {
-  other.reader_ = nullptr;
-}
+    : path_(std::move(other.path_)), entries_(std::move(other.entries_)),
+      index_(std::move(other.index_)), map_(std::move(other.map_)) {}
 
 ZipArchive& ZipArchive::operator=(ZipArchive&& other) noexcept {
   if (this != &other) {
-    if (reader_) {
-      mz_zip_reader_close(reader_);
-      mz_zip_reader_delete(&reader_);
-    }
-    reader_ = other.reader_;
     path_ = std::move(other.path_);
-    other.reader_ = nullptr;
+    entries_ = std::move(other.entries_);
+    index_ = std::move(other.index_);
+    map_ = std::move(other.map_);
   }
   return *this;
 }
 
-ZipArchive ZipArchive::open(const std::filesystem::path& path) {
+void ZipArchive::open_reader(void* reader) const {
+  int32_t status = MZ_OK;
+  if (map_) {
+    const auto data = map_->data();
+    status = mz_zip_reader_open_buffer(reader,
+                                       reinterpret_cast<const uint8_t*>(data.data()),
+                                       static_cast<int32_t>(data.size()), 0);
+  } else {
+    const std::string utf8_path = to_utf8(extended_path(path_));
+    status = mz_zip_reader_open_file(reader, utf8_path.c_str());
+  }
+  if (status != MZ_OK) {
+    throw_error(ErrorCode::ZipReadError,
+                "cannot open zip " + to_utf8(path_) + " (mz code " + std::to_string(status) +
+                    ")");
+  }
+}
+
+ZipArchive ZipArchive::open(const std::filesystem::path& path, bool memory_map) {
   std::error_code ec;
   if (!std::filesystem::exists(extended_path(path), ec))
     throw_error(ErrorCode::FileNotFound, "cannot open " + to_utf8(path));
@@ -139,67 +183,56 @@ ZipArchive ZipArchive::open(const std::filesystem::path& path) {
 
   ZipArchive archive;
   archive.path_ = path;
-  archive.reader_ = mz_zip_reader_create();
-  if (!archive.reader_) throw_error(ErrorCode::Internal, "cannot allocate zip reader");
-  const std::string utf8_path = to_utf8(extended_path(path));
-  int32_t result = mz_zip_reader_open_file(archive.reader_, utf8_path.c_str());
-  if (result != MZ_OK) {
-    mz_zip_reader_delete(&archive.reader_);
-    throw_error(ErrorCode::ZipReadError,
-                "cannot open zip " + utf8_path + " (mz code " + std::to_string(result) + ")");
+  if (memory_map) archive.map_ = platform::MappedFile::try_open(path);
+  ReaderHandle reader;
+  reader.create();
+  archive.open_reader(reader.get());
+
+  int32_t status = mz_zip_reader_goto_first_entry(reader.get());
+  while (status == MZ_OK) {
+    mz_zip_file* info = nullptr;
+    if (mz_zip_reader_entry_get_info(reader.get(), &info) == MZ_OK && info) {
+      ZipEntryInfo entry;
+      fill_info(info, &entry);
+      archive.index_.try_emplace(entry.name, archive.entries_.size());
+      archive.entries_.push_back(std::move(entry));
+    }
+    status = mz_zip_reader_goto_next_entry(reader.get());
   }
   return archive;
 }
 
-std::vector<ZipEntryInfo> ZipArchive::entries() const {
-  std::vector<ZipEntryInfo> result;
-  int32_t status = mz_zip_reader_goto_first_entry(reader_);
-  while (status == MZ_OK) {
-    mz_zip_file* info = nullptr;
-    if (mz_zip_reader_entry_get_info(reader_, &info) == MZ_OK && info) {
-      ZipEntryInfo entry;
-      fill_info(info, &entry);
-      result.push_back(std::move(entry));
-    }
-    status = mz_zip_reader_goto_next_entry(reader_);
-  }
-  return result;
-}
+std::vector<ZipEntryInfo> ZipArchive::entries() const { return entries_; }
 
 bool ZipArchive::has(std::string_view name) const {
-  std::string key(name);
-  return mz_zip_reader_locate_entry(reader_, key.c_str(), 0) == MZ_OK;
+  return index_.find(name) != index_.end();
 }
 
 ZipEntryInfo ZipArchive::locate(std::string_view name) const {
-  std::string key(name);
-  int32_t status = mz_zip_reader_locate_entry(reader_, key.c_str(), 0);
-  if (status != MZ_OK) {
-    // Fall back to a unique case-insensitive match.
-    std::vector<std::string> candidates;
-    for (const auto& entry : entries()) {
-      if (equals_icase(entry.name, name)) candidates.push_back(entry.name);
-    }
-    if (candidates.size() > 1) {
-      std::string message = "ambiguous part '" + key + "', candidates:";
-      for (const auto& candidate : candidates) message += " " + candidate;
-      throw_error(ErrorCode::MissingPart, std::move(message));
-    }
-    if (candidates.empty()) throw_error(ErrorCode::MissingPart, "missing part '" + key + "'");
-    status = mz_zip_reader_locate_entry(reader_, candidates.front().c_str(), 0);
-    if (status != MZ_OK) throw_zip_error("cannot locate", key, status);
+  auto found = index_.find(name);
+  if (found != index_.end()) {
+    check_entry(entries_[found->second]);
+    return entries_[found->second];
   }
-  mz_zip_file* info = nullptr;
-  status = mz_zip_reader_entry_get_info(reader_, &info);
-  if (status != MZ_OK || !info) throw_zip_error("cannot stat", key, status);
-  ZipEntryInfo result;
-  fill_info(info, &result);
-  check_entry(result);
-  return result;
+
+  // Fall back to a unique case-insensitive match.
+  std::vector<size_t> candidates;
+  for (size_t i = 0; i < entries_.size(); ++i) {
+    if (equals_icase(entries_[i].name, name)) candidates.push_back(i);
+  }
+  if (candidates.size() > 1) {
+    std::string message = "ambiguous part '" + std::string(name) + "', candidates:";
+    for (size_t index : candidates) message += " " + entries_[index].name;
+    throw_error(ErrorCode::MissingPart, std::move(message));
+  }
+  if (candidates.empty())
+    throw_error(ErrorCode::MissingPart, "missing part '" + std::string(name) + "'");
+  check_entry(entries_[candidates.front()]);
+  return entries_[candidates.front()];
 }
 
-std::string ZipArchive::read_all(std::string_view name, size_t max_bytes) {
-  ZipEntryInfo info = locate(name);
+std::string ZipArchive::read_all(std::string_view name, size_t max_bytes) const {
+  const ZipEntryInfo info = locate(name);
   if (info.uncompressed_size > max_bytes)
     throw_error(ErrorCode::LimitExceeded,
                 "part '" + info.name + "' exceeds the " + std::to_string(max_bytes) +
@@ -207,56 +240,78 @@ std::string ZipArchive::read_all(std::string_view name, size_t max_bytes) {
   if (info.uncompressed_size > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))
     throw_error(ErrorCode::LimitExceeded, "part too large to buffer: " + info.name);
 
-  int32_t status = mz_zip_reader_entry_open(reader_);
-  if (status != MZ_OK) throw_zip_error("cannot open entry", info.name, status);
+  ReaderHandle reader;
+  reader.create();
+  open_reader(reader.get());
+  open_entry_on(reader.get(), info.name);
+  struct EntryCloser {
+    void* reader;
+    ~EntryCloser() { mz_zip_reader_entry_close(reader); }
+  } closer{reader.get()};
 
   std::string out;
   if (info.uncompressed_size > 0) {
-    out.resize(static_cast<size_t>(info.uncompressed_size));
-    int32_t length = mz_zip_reader_entry_save_buffer_length(reader_);
-    if (length < 0) {
-      mz_zip_reader_entry_close(reader_);
-      throw_zip_error("cannot size entry", info.name, length);
-    }
+    int32_t length = mz_zip_reader_entry_save_buffer_length(reader.get());
+    if (length < 0) throw_zip_error("cannot size entry", info.name, length);
+    if (static_cast<uint64_t>(length) > max_bytes)
+      throw_error(ErrorCode::LimitExceeded,
+                  "part '" + info.name + "' exceeds the " + std::to_string(max_bytes) +
+                      "-byte metadata limit");
+    out.resize(static_cast<size_t>(length));
     if (length > 0) {
-      int32_t read = mz_zip_reader_entry_save_buffer(reader_, out.data(), length);
-      if (read != MZ_OK) {
-        mz_zip_reader_entry_close(reader_);
-        throw_zip_error("cannot decompress", info.name, read);
-      }
-    } else {
-      out.clear();
+      int32_t read = mz_zip_reader_entry_save_buffer(reader.get(), out.data(), length);
+      if (read != MZ_OK) throw_zip_error("cannot decompress", info.name, read);
     }
   }
-  mz_zip_reader_entry_close(reader_);
   return out;
 }
 
-std::unique_ptr<ZipEntryStream> ZipArchive::open_entry(std::string_view name) {
-  ZipEntryInfo info = locate(name);
+std::unique_ptr<ZipEntryStream> ZipArchive::open_entry(std::string_view name) const {
+  const ZipEntryInfo info = locate(name);
 
   auto stream = std::unique_ptr<ZipEntryStream>(new ZipEntryStream());
   stream->reader_ = mz_zip_reader_create();
   if (!stream->reader_) throw_error(ErrorCode::Internal, "cannot allocate zip reader");
-  const std::string utf8_path = to_utf8(extended_path(path_));
-  int32_t status = mz_zip_reader_open_file(stream->reader_, utf8_path.c_str());
-  if (status != MZ_OK) {
-    mz_zip_reader_delete(&stream->reader_);
-    throw_error(ErrorCode::ZipReadError, "cannot reopen zip " + utf8_path);
+  try {
+    open_reader(stream->reader_);
+  } catch (...) {
+    stream->close();
+    throw;
   }
-  status = mz_zip_reader_locate_entry(stream->reader_, info.name.c_str(), 0);
+  int32_t status = mz_zip_reader_locate_entry(stream->reader_, info.name.c_str(), 0);
   if (status != MZ_OK) {
-    mz_zip_reader_delete(&stream->reader_);
+    stream->close();
     throw_zip_error("cannot locate", info.name, status);
   }
   status = mz_zip_reader_entry_open(stream->reader_);
   if (status != MZ_OK) {
-    mz_zip_reader_delete(&stream->reader_);
+    stream->close();
     throw_zip_error("cannot open entry", info.name, status);
   }
-  stream->info_ = std::move(info);
+  stream->info_ = info;
   stream->remaining_ = stream->info_.uncompressed_size;
   return stream;
+}
+
+std::optional<std::span<const std::byte>> ZipArchive::mapped_store_entry(
+    std::string_view name) const {
+  if (!map_) return std::nullopt;
+  const ZipEntryInfo info = locate(name);
+  if (info.method != MZ_COMPRESS_METHOD_STORE) return std::nullopt;
+  const std::span<const std::byte> data = map_->data();
+  const uint64_t header = info.local_header_offset;
+  if (header > data.size() || data.size() - header < 30) return std::nullopt;
+  const auto* raw = reinterpret_cast<const unsigned char*>(data.data() + header);
+  if (raw[0] != 'P' || raw[1] != 'K' || raw[2] != 3 || raw[3] != 4)
+    return std::nullopt;
+  // Local extra fields can differ from the central-directory copy (ZIP64
+  // writers often emit local sizes only), so read the local lengths.
+  const uint16_t filename_size = static_cast<uint16_t>(raw[26] | (raw[27] << 8));
+  const uint16_t extrafield_size = static_cast<uint16_t>(raw[28] | (raw[29] << 8));
+  const uint64_t offset = header + 30 + filename_size + extrafield_size;
+  if (offset > data.size()) return std::nullopt;
+  if (info.uncompressed_size > data.size() - offset) return std::nullopt;
+  return data.subspan(static_cast<size_t>(offset), static_cast<size_t>(info.uncompressed_size));
 }
 
 } // namespace fastxl::detail::zip

@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 #define FASTXL_HAVE_SSE2 1
@@ -24,8 +25,17 @@ inline size_t find_byte(const char* data, size_t size, char needle) noexcept {
   return found ? static_cast<size_t>(static_cast<const char*>(found) - data) : size;
 }
 
-// Finds the next '>', '"' or '\''. Used by the quote-aware start-tag scan so
-// the inner loop advances 16 bytes at a time.
+struct XmlTextScan {
+  bool has_non_ascii = false;
+  bool has_entity = false;
+  bool has_carriage_return = false;
+  size_t bad_offset = static_cast<size_t>(-1);
+};
+
+// Portable implementations: SSE2 on x86, scalar elsewhere. The dispatchers below
+// pick AVX2 (x86_64) or NEON (aarch64) at runtime.
+namespace fallback {
+
 inline size_t find_tag_delimiter(const char* data, size_t size) noexcept {
   const size_t head = size < kSimdWidth ? size : kSimdWidth;
   size_t index = 0;
@@ -72,13 +82,6 @@ inline bool all_ascii(const char* data, size_t size) noexcept {
   return true;
 #endif
 }
-
-struct XmlTextScan {
-  bool has_non_ascii = false;
-  bool has_entity = false;
-  bool has_carriage_return = false;
-  size_t bad_offset = static_cast<size_t>(-1);
-};
 
 // One pass over XML text: locates ASCII control characters (except tab/LF/CR)
 // and the U+FFFE/U+FFFF noncharacter encodings (EF BF BE / EF BF BF), while
@@ -139,5 +142,29 @@ inline XmlTextScan scan_xml_text(const char* data, size_t size) noexcept {
   }
   return result;
 }
+
+} // namespace fallback
+
+// Optional backends. AVX2 is compiled only on x86_64 with per-file flags; NEON
+// only on AArch64 (where NEON is mandatory).
+namespace avx2 {
+size_t find_tag_delimiter(const char* data, size_t size) noexcept;
+bool all_ascii(const char* data, size_t size) noexcept;
+XmlTextScan scan_xml_text(const char* data, size_t size) noexcept;
+} // namespace avx2
+
+namespace neon {
+size_t find_tag_delimiter(const char* data, size_t size) noexcept;
+bool all_ascii(const char* data, size_t size) noexcept;
+XmlTextScan scan_xml_text(const char* data, size_t size) noexcept;
+} // namespace neon
+
+bool has_avx2() noexcept;
+// "avx2", "neon", "sse2" or "scalar".
+std::string_view backend() noexcept;
+
+size_t find_tag_delimiter(const char* data, size_t size) noexcept;
+bool all_ascii(const char* data, size_t size) noexcept;
+XmlTextScan scan_xml_text(const char* data, size_t size) noexcept;
 
 } // namespace fastxl::detail::simd

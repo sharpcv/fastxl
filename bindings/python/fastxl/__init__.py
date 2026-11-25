@@ -33,6 +33,7 @@ from ._fastxl import (  # noqa: E402
     probe as probe,
     read_rows as read_rows,
     schema as schema,
+    search as search,
     write_xlsx as write_xlsx,
 )
 
@@ -45,5 +46,6 @@ __all__: list[str] = [
     "probe",
     "read_rows",
     "schema",
+    "search",
     "write_xlsx",
 ]

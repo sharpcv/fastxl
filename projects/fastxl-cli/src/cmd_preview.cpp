@@ -16,6 +16,7 @@
 #include "fastxl/fastxl.hpp"
 #include "fastxl/text.hpp"
 #include "headers.hpp"
+#include "metadata_json.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -37,32 +38,7 @@ struct SheetRange {
 };
 
 bool parse_ref_part(std::string_view text, uint32_t& row, uint32_t& col) {
-  size_t i = 0;
-  if (i < text.size() && text[i] == '$') ++i;
-  uint32_t value = 0;
-  size_t letters = 0;
-  while (i < text.size() && std::isalpha(static_cast<unsigned char>(text[i]))) {
-    const char c = text[i];
-    const uint32_t digit = static_cast<uint32_t>((c >= 'a' ? c - 'a' : c - 'A') + 1);
-    if (value > (kMaxCol - digit) / 26) return false;
-    value = value * 26 + digit;
-    ++i;
-    ++letters;
-  }
-  if (letters == 0) return false;
-  if (i < text.size() && text[i] == '$') ++i;
-  uint64_t number = 0;
-  size_t digits = 0;
-  while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
-    number = number * 10 + static_cast<uint64_t>(text[i] - '0');
-    if (number > kMaxRow) return false;
-    ++i;
-    ++digits;
-  }
-  if (digits == 0 || number == 0 || i != text.size()) return false;
-  row = static_cast<uint32_t>(number);
-  col = value;
-  return true;
+  return parse_cell_ref(text, &row, &col);
 }
 
 SheetRange parse_range(const Args& args) {
@@ -94,21 +70,6 @@ SheetRange parse_range(const Args& args) {
   return range;
 }
 
-std::string column_letter(uint32_t col) {
-  std::string letters;
-  while (col > 0) {
-    const uint32_t remainder = (col - 1) % 26;
-    letters.push_back(static_cast<char>('A' + remainder));
-    col = (col - 1) / 26;
-  }
-  std::reverse(letters.begin(), letters.end());
-  return letters;
-}
-
-std::string cell_ref(uint32_t row, uint32_t col) {
-  return column_letter(col) + std::to_string(row);
-}
-
 std::string type_name(CellType type) {
   switch (type) {
   case CellType::Number: return "number";
@@ -131,6 +92,11 @@ struct PreviewCell {
   std::string type;
   std::string text;
   std::string formula;
+  std::string num_fmt;
+  std::vector<std::string> style_flags;
+  std::string font_color;
+  std::string fill_color;
+  bool needs_recalc = false;
   bool truncated = false;
 };
 
@@ -156,7 +122,8 @@ bool wanted_column(const std::vector<uint8_t>& wanted, uint32_t col) {
   return col < wanted.size() && wanted[col] != 0;
 }
 
-PreviewCell make_preview_cell(const CellView& cell, size_t max_bytes, std::string& scratch) {
+PreviewCell make_preview_cell(const CellView& cell, size_t max_bytes, std::string& scratch,
+                              const SheetStyle* styles) {
   PreviewCell out;
   out.col = cell.col;
   out.type = type_name(cell.type);
@@ -178,13 +145,23 @@ PreviewCell make_preview_cell(const CellView& cell, size_t max_bytes, std::strin
       out.formula.assign(cell.formula.data(), cell.formula.size());
     }
   }
+  if (styles != nullptr) {
+    const CellStyleInfo info = styles->info(cell.style);
+    if (!info.num_fmt.empty() && info.num_fmt != "General")
+      out.num_fmt.assign(info.num_fmt);
+    for (const auto& flag : cell_style_flags(info.flags)) out.style_flags.push_back(flag);
+    if (info.flags.has_font_color) out.font_color = color_hex(info.flags.font_color);
+    if (info.flags.has_fill) out.fill_color = color_hex(info.flags.fill_color);
+  }
+  out.needs_recalc = cell.type == CellType::Null && cell.has_formula;
   return out;
 }
 
 class PreviewSink : public SaxHandler {
 public:
-  PreviewSink(const SheetRange& range, const std::vector<uint8_t>& wanted, size_t max_bytes)
-      : range_(range), wanted_(wanted), max_bytes_(max_bytes) {}
+  PreviewSink(const SheetRange& range, const std::vector<uint8_t>& wanted, size_t max_bytes,
+              const SheetStyle* styles)
+      : range_(range), wanted_(wanted), max_bytes_(max_bytes), styles_(styles) {}
 
   void on_dimension(std::string_view ref) override { dimension_.assign(ref); }
   void on_column(const ColumnView& column) override {
@@ -199,11 +176,36 @@ public:
   void on_pane(const PaneView& pane) override { pane_top_row_ = pane.top_left_row; }
   void on_auto_filter(std::string_view ref) override { auto_filter_.assign(ref); }
 
+  void on_merge_cell(const MergeRange& range) override {
+    if (merged_cells_.size() >= 1024) {
+      merged_cells_truncated_ = true;
+      return;
+    }
+    merged_cells_.push_back(fastxl::range_ref(range));
+  }
+
+  void on_row_info(uint32_t row, const RowInfo& info) override {
+    if (!info.hidden) return;
+    if (hidden_rows_.size() >= 4096) {
+      hidden_rows_truncated_ = true;
+      return;
+    }
+    hidden_rows_.push_back(row);
+  }
+
+  void on_filter_column(const FilterColumnView& column) override {
+    FilterColumnInfo info;
+    info.column = column.col_id + 1;
+    for (std::string_view value : column.values) info.values.emplace_back(value);
+    for (const FilterConditionView& condition : column.custom)
+      info.custom.push_back({std::string(condition.op), std::string(condition.value)});
+    filter_columns_.push_back(std::move(info));
+  }
+
   bool on_row_begin(uint32_t row) override {
     const bool summary = summaries_.size() < kSummaryRows;
     const bool display = row >= range_.first_row && row <= range_.last_row;
     if (row > range_.last_row) more_rows_ = true;
-    if (!summary && !display && row > range_.last_row) return false;
     if (row > max_row_) max_row_ = row;
     current_ = {};
     current_.number = row;
@@ -212,21 +214,24 @@ public:
     summary_.number = row;
     has_summary_ = summary;
     active_ = true;
+    // The scan continues past the requested range so metadata after sheetData
+    // (merges, filters, final row attributes) is still observable.
     return true;
   }
 
   bool on_cell(const CellView& cell) override {
-    if (cell.type == CellType::Null) return true;
+    if (cell.col > max_col_) max_col_ = cell.col;
+    if (cell.type == CellType::Null && cell.has_formula) ++uncached_formulas_;
+    if (cell.type == CellType::Null && !cell.has_formula) return true;
     if ((cell.type == CellType::Text || cell.type == CellType::SharedString) &&
-        cell.text.empty())
+        cell.text.empty() && !cell.has_formula)
       return true;
     if (has_summary_) summarize(cell, summary_);
-    if (cell.col > max_col_) max_col_ = cell.col;
     if (!current_.display) return true;
     if (cell.col < range_.first_col || cell.col > range_.last_col ||
         !wanted_column(wanted_, cell.col))
       return true;
-    current_.cells.push_back(make_preview_cell(cell, max_bytes_, text_scratch_));
+    current_.cells.push_back(make_preview_cell(cell, max_bytes_, text_scratch_, styles_));
     return true;
   }
 
@@ -242,18 +247,25 @@ public:
   std::string used_range() const {
     if (!dimension_.empty()) return dimension_;
     if (max_row_ == 0 || max_col_ == 0) return {};
-    return "A1:" + column_letter(max_col_) + std::to_string(max_row_);
+    return "A1:" + column_letters(max_col_) + std::to_string(max_row_);
   }
   const std::string& auto_filter() const { return auto_filter_; }
   uint32_t pane_top_row() const { return pane_top_row_; }
   const std::vector<uint32_t>& hidden_columns() const { return hidden_columns_; }
   uint32_t max_col() const { return max_col_; }
   bool more_rows() const { return more_rows_; }
+  const std::vector<std::string>& merged_cells() const { return merged_cells_; }
+  bool merged_cells_truncated() const { return merged_cells_truncated_; }
+  const std::vector<uint32_t>& hidden_rows() const { return hidden_rows_; }
+  bool hidden_rows_truncated() const { return hidden_rows_truncated_; }
+  const std::vector<FilterColumnInfo>& filter_columns() const { return filter_columns_; }
+  uint64_t uncached_formulas() const { return uncached_formulas_; }
 
 private:
   SheetRange range_;
   const std::vector<uint8_t>& wanted_;
   size_t max_bytes_;
+  const SheetStyle* styles_;
   std::vector<PreviewRow> rows_;
   std::vector<RowSummary> summaries_;
   PreviewRow current_;
@@ -262,6 +274,12 @@ private:
   std::string dimension_;
   std::string auto_filter_;
   std::vector<uint32_t> hidden_columns_;
+  std::vector<std::string> merged_cells_;
+  std::vector<uint32_t> hidden_rows_;
+  std::vector<FilterColumnInfo> filter_columns_;
+  uint64_t uncached_formulas_ = 0;
+  bool merged_cells_truncated_ = false;
+  bool hidden_rows_truncated_ = false;
   uint32_t pane_top_row_ = 0;
   uint32_t max_col_ = 0;
   uint32_t max_row_ = 0;
@@ -300,7 +318,7 @@ Json columns_json(uint32_t max_col, uint32_t header_row, const std::vector<Previ
     if (!wanted_column(wanted, col)) continue;
     Json entry;
     entry["index"] = col;
-    entry["letter"] = column_letter(col);
+    entry["letter"] = column_letters(col);
     std::string name;
     if (col < header_names.size() && !header_names[col].empty()) {
       name = header_names[col];
@@ -326,12 +344,17 @@ Json rows_json(const std::vector<PreviewRow>& rows) {
     for (const PreviewCell& cell : row.cells) {
       Json item;
       item["col"] = cell.col;
-      item["letter"] = column_letter(cell.col);
+      item["letter"] = column_letters(cell.col);
       item["ref"] = cell_ref(row.number, cell.col);
       item["type"] = cell.type;
       item["text"] = cell.text;
       if (cell.truncated) item["truncated"] = true;
       if (!cell.formula.empty()) item["formula"] = cell.formula;
+      if (!cell.num_fmt.empty()) item["num_fmt"] = cell.num_fmt;
+      if (!cell.style_flags.empty()) item["style_flags"] = cell.style_flags;
+      if (!cell.font_color.empty()) item["font_color"] = cell.font_color;
+      if (!cell.fill_color.empty()) item["fill_color"] = cell.fill_color;
+      if (cell.needs_recalc) item["needs_recalc"] = true;
       cells.push_back(std::move(item));
     }
     entry["cells"] = std::move(cells);
@@ -354,6 +377,17 @@ std::vector<uint8_t> build_wanted(const Args& args, const SheetRange& range) {
   return wanted;
 }
 
+struct PreviewMetadata {
+  const SheetMetadata* sheet = nullptr;
+  std::span<const DefinedName> defined_names;
+  const std::vector<std::string>* merged_cells = nullptr;
+  bool merged_cells_truncated = false;
+  const std::vector<uint32_t>* hidden_rows = nullptr;
+  bool hidden_rows_truncated = false;
+  const std::vector<FilterColumnInfo>* filter_columns = nullptr;
+  uint64_t uncached_formulas = 0;
+};
+
 Json preview_root(const std::string& input, Format format, const std::string& sheet_name,
                   uint32_t sheet_index, std::string_view state, const SheetRange& range,
                   const HeaderChoice& choice, uint32_t header_row,
@@ -361,7 +395,8 @@ Json preview_root(const std::string& input, Format format, const std::string& sh
                   const std::vector<uint8_t>& wanted,
                   std::span<const std::string_view> reader_columns, std::string_view dimension,
                   std::string_view auto_filter, uint32_t pane_top_row,
-                  const std::vector<uint32_t>& hidden_columns, bool more_rows, bool header_auto) {
+                  const std::vector<uint32_t>& hidden_columns, bool more_rows, bool header_auto,
+                  const PreviewMetadata& metadata) {
   Json root;
   root["version"] = 1;
   root["ok"] = true;
@@ -389,6 +424,26 @@ Json preview_root(const std::string& input, Format format, const std::string& sh
                                  range.last_col, reader_columns);
   root["rows"] = rows_json(rows);
   root["truncated"] = more_rows;
+
+  root["defined_names"] = defined_names_json(metadata.defined_names);
+  if (metadata.sheet != nullptr) {
+    add_sheet_metadata(root, *metadata.sheet);
+  } else {
+    root["tables"] = Json::array();
+    root["comments"] = {{"count", 0}, {"items", Json::array()}, {"truncated", false}};
+    root["pivot_tables"] = Json::array();
+    root["charts"] = Json::array();
+  }
+  root["merged_cells"] =
+      metadata.merged_cells != nullptr ? *metadata.merged_cells : std::vector<std::string>{};
+  root["merged_cells_truncated"] = metadata.merged_cells_truncated;
+  root["hidden_rows"] =
+      metadata.hidden_rows != nullptr ? *metadata.hidden_rows : std::vector<uint32_t>{};
+  root["hidden_rows_truncated"] = metadata.hidden_rows_truncated;
+  root["filter_columns"] = metadata.filter_columns != nullptr
+                               ? filter_columns_json(*metadata.filter_columns)
+                               : Json::array();
+  root["uncached_formulas"] = metadata.uncached_formulas;
   return root;
 }
 
@@ -449,17 +504,26 @@ int run_preview(const Args& args) {
   if (format == Format::Xlsx) {
     WorkBook workbook = WorkBook::open(path);
     const size_t index = resolve_sheet_index(workbook, args.sheet);
-    PreviewSink sink(range, wanted, args.max_cell_bytes);
+    PreviewSink sink(range, wanted, args.max_cell_bytes, &workbook.style());
     workbook.read_sheet(index, sink);
 
     HeaderChoice choice = detect_header(sink.summaries(), sink.auto_filter(), sink.pane_top_row());
     const uint32_t header_row = args.header_auto ? choice.row : args.header_row;
     const WorkSheet& sheet = workbook.sheets()[index];
+    PreviewMetadata metadata;
+    metadata.sheet = &workbook.sheet_metadata(index);
+    metadata.defined_names = workbook.defined_names();
+    metadata.merged_cells = &sink.merged_cells();
+    metadata.merged_cells_truncated = sink.merged_cells_truncated();
+    metadata.hidden_rows = &sink.hidden_rows();
+    metadata.hidden_rows_truncated = sink.hidden_rows_truncated();
+    metadata.filter_columns = &sink.filter_columns();
+    metadata.uncached_formulas = sink.uncached_formulas();
     Json root = preview_root(input, format, std::string(sheet.name()),
                              static_cast<uint32_t>(index), sheet_state_name(sheet.state()),
                              range, choice, header_row, sink.rows(), sink.max_col(), wanted, {},
                              sink.used_range(), sink.auto_filter(), sink.pane_top_row(),
-                             sink.hidden_columns(), sink.more_rows(), args.header_auto);
+                             sink.hidden_columns(), sink.more_rows(), args.header_auto, metadata);
     print_preview_output(args, root);
     return 0;
   }
@@ -507,7 +571,7 @@ int run_preview(const Args& args) {
       if (!display || cell.col < range.first_col || cell.col > range.last_col ||
           !wanted_column(wanted, cell.col))
         continue;
-      preview.cells.push_back(make_preview_cell(cell, args.max_cell_bytes, scratch));
+      preview.cells.push_back(make_preview_cell(cell, args.max_cell_bytes, scratch, nullptr));
     }
     if (summary) summaries.push_back(summary_row);
     if (display || summary) rows.push_back(std::move(preview));
@@ -521,7 +585,7 @@ int run_preview(const Args& args) {
   for (const auto& column : reader_columns) column_views.emplace_back(column);
   Json root = preview_root(input, format, sheet_name, 0, {}, range, choice, header_row, rows,
                            max_col, wanted, column_views, {}, {}, 0, {}, more_rows,
-                           args.header_auto);
+                           args.header_auto, PreviewMetadata{});
   print_preview_output(args, root);
   return 0;
 }

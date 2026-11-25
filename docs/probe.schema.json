@@ -180,6 +180,24 @@
         },
         "uncompressed_bytes": {
           "type": "integer"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableInfo"
+          }
+        },
+        "tables_truncated": {
+          "type": "boolean"
+        },
+        "comments_count": {
+          "type": "integer"
+        },
+        "pivot_tables_count": {
+          "type": "integer"
+        },
+        "charts_count": {
+          "type": "integer"
         }
       },
       "additionalProperties": true
@@ -211,6 +229,15 @@
         },
         "shared_strings": {
           "type": "integer"
+        },
+        "defined_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinedName"
+          }
+        },
+        "defined_names_truncated": {
+          "type": "boolean"
         },
         "sheets": {
           "type": "array",
@@ -281,6 +308,335 @@
         }
       },
       "additionalProperties": false
+    },
+    "DefinedName": {
+      "type": "object",
+      "required": [
+        "name",
+        "ref"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "local_sheet_index": {
+          "type": "integer"
+        },
+        "hidden": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "TableInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "ref",
+        "columns",
+        "header_rows"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_rows": {
+          "type": "integer"
+        },
+        "columns_truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CommentItem": {
+      "type": "object",
+      "required": [
+        "ref",
+        "author",
+        "text"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CommentsInfo": {
+      "type": "object",
+      "required": [
+        "count",
+        "items",
+        "truncated"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommentItem"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PivotTableInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "part",
+        "cache_id"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "part": {
+          "type": "string"
+        },
+        "cache_id": {
+          "type": "integer"
+        },
+        "source_sheet": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ChartRef": {
+      "type": "object",
+      "required": [
+        "sheet",
+        "ref"
+      ],
+      "properties": {
+        "sheet": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChartInfo": {
+      "type": "object",
+      "required": [
+        "part",
+        "refs"
+      ],
+      "properties": {
+        "part": {
+          "type": "string"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartRef"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "FilterCondition": {
+      "type": "object",
+      "required": [
+        "operator",
+        "value"
+      ],
+      "properties": {
+        "operator": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "FilterColumn": {
+      "type": "object",
+      "required": [
+        "column",
+        "values",
+        "custom"
+      ],
+      "properties": {
+        "column": {
+          "type": "integer"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "custom": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilterCondition"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "FormulaLink": {
+      "type": "object",
+      "required": [
+        "cell",
+        "formula",
+        "refs"
+      ],
+      "properties": {
+        "cell": {
+          "type": "string"
+        },
+        "formula": {
+          "type": "string"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartRef"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "JoinKey": {
+      "type": "object",
+      "required": [
+        "left_sheet",
+        "left_column",
+        "left_name",
+        "right_sheet",
+        "right_column",
+        "right_name",
+        "reason"
+      ],
+      "properties": {
+        "left_sheet": {
+          "type": "string"
+        },
+        "left_column": {
+          "type": "integer"
+        },
+        "left_name": {
+          "type": "string"
+        },
+        "right_sheet": {
+          "type": "string"
+        },
+        "right_column": {
+          "type": "integer"
+        },
+        "right_name": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "same_name",
+            "value_overlap"
+          ]
+        },
+        "overlap": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MetadataBlock": {
+      "type": "object",
+      "properties": {
+        "merged_cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "merged_cells_truncated": {
+          "type": "boolean"
+        },
+        "hidden_rows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "hidden_rows_truncated": {
+          "type": "boolean"
+        },
+        "filter_columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilterColumn"
+          }
+        },
+        "uncached_formulas": {
+          "type": "integer"
+        },
+        "formula_links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FormulaLink"
+          }
+        },
+        "formula_links_truncated": {
+          "type": "boolean"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableInfo"
+          }
+        },
+        "tables_truncated": {
+          "type": "boolean"
+        },
+        "comments": {
+          "$ref": "#/$defs/CommentsInfo"
+        },
+        "pivot_tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PivotTableInfo"
+          }
+        },
+        "charts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartInfo"
+          }
+        }
+      },
+      "additionalProperties": true
     },
     "Column": {
       "type": "object",
@@ -362,6 +718,21 @@
           "items": {
             "type": "string"
           }
+        },
+        "enum_values_truncated": {
+          "type": "boolean"
+        },
+        "num_fmt": {
+          "type": "string"
+        },
+        "style_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "formula_cells": {
+          "type": "integer"
         }
       },
       "additionalProperties": true
@@ -431,6 +802,84 @@
           "type": "array",
           "items": {
             "type": "integer"
+          }
+        },
+        "merged_cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "merged_cells_truncated": {
+          "type": "boolean"
+        },
+        "hidden_rows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "hidden_rows_truncated": {
+          "type": "boolean"
+        },
+        "filter_columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilterColumn"
+          }
+        },
+        "uncached_formulas": {
+          "type": "integer"
+        },
+        "formula_links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FormulaLink"
+          }
+        },
+        "formula_links_truncated": {
+          "type": "boolean"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableInfo"
+          }
+        },
+        "tables_truncated": {
+          "type": "boolean"
+        },
+        "comments": {
+          "$ref": "#/$defs/CommentsInfo"
+        },
+        "pivot_tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PivotTableInfo"
+          }
+        },
+        "charts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartInfo"
+          }
+        },
+        "defined_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinedName"
+          }
+        },
+        "defined_names_truncated": {
+          "type": "boolean"
+        },
+        "range": {
+          "type": "string"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SheetMeta"
           }
         },
         "columns": {
@@ -511,6 +960,81 @@
         "parallel": {
           "type": "boolean"
         },
+        "merged_cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "merged_cells_truncated": {
+          "type": "boolean"
+        },
+        "hidden_rows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "hidden_rows_truncated": {
+          "type": "boolean"
+        },
+        "filter_columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilterColumn"
+          }
+        },
+        "uncached_formulas": {
+          "type": "integer"
+        },
+        "formula_links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FormulaLink"
+          }
+        },
+        "formula_links_truncated": {
+          "type": "boolean"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableInfo"
+          }
+        },
+        "tables_truncated": {
+          "type": "boolean"
+        },
+        "comments": {
+          "$ref": "#/$defs/CommentsInfo"
+        },
+        "pivot_tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PivotTableInfo"
+          }
+        },
+        "charts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartInfo"
+          }
+        },
+        "defined_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinedName"
+          }
+        },
+        "range": {
+          "type": "string"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SheetMeta"
+          }
+        },
         "columns": {
           "type": "array",
           "items": {
@@ -560,6 +1084,21 @@
           "items": {
             "$ref": "#/$defs/SheetMeta"
           }
+        },
+        "defined_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinedName"
+          }
+        },
+        "defined_names_truncated": {
+          "type": "boolean"
+        },
+        "join_keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JoinKey"
+          }
         }
       },
       "additionalProperties": true
@@ -594,6 +1133,24 @@
         },
         "formula": {
           "type": "string"
+        },
+        "num_fmt": {
+          "type": "string"
+        },
+        "style_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "font_color": {
+          "type": "string"
+        },
+        "fill_color": {
+          "type": "string"
+        },
+        "needs_recalc": {
+          "type": "boolean"
         }
       },
       "additionalProperties": true
@@ -713,6 +1270,63 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "defined_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinedName"
+          }
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableInfo"
+          }
+        },
+        "tables_truncated": {
+          "type": "boolean"
+        },
+        "comments": {
+          "$ref": "#/$defs/CommentsInfo"
+        },
+        "pivot_tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PivotTableInfo"
+          }
+        },
+        "charts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChartInfo"
+          }
+        },
+        "merged_cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "merged_cells_truncated": {
+          "type": "boolean"
+        },
+        "hidden_rows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "hidden_rows_truncated": {
+          "type": "boolean"
+        },
+        "filter_columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilterColumn"
+          }
+        },
+        "uncached_formulas": {
+          "type": "integer"
         }
       },
       "additionalProperties": true

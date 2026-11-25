@@ -2,7 +2,7 @@
 """Minimal MCP stdio server for fastxl-cli.
 
 Exposes read-only spreadsheet probes as MCP tools:
-    fastxl_info, fastxl_preview, fastxl_schema, fastxl_probe
+    fastxl_info, fastxl_preview, fastxl_schema, fastxl_probe, fastxl_search
 
 Usage:
     python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli
@@ -73,6 +73,17 @@ def common_args(arguments, command):
         for option in ("rows", "range", "columns", "max_cell_bytes"):
             if arguments.get(option) is not None:
                 args += ["--" + option.replace("_", "-"), str(arguments[option])]
+    if command == "search":
+        args += ["--query", str(arguments.get("query", ""))]
+        if arguments.get("regex"):
+            args.append("--regex")
+        if arguments.get("ignore_case") is False:
+            args.append("--case-sensitive")
+        for option in ("context", "max_hits", "max_cell_bytes"):
+            if arguments.get(option) is not None:
+                args += ["--" + option.replace("_", "-"), str(arguments[option])]
+    if arguments.get("max_bytes") is not None:
+        args += ["--max-bytes", str(arguments["max_bytes"])]
     # Tools parse the JSON contract, so ask for it explicitly; the CLI defaults
     # to a human-readable layout.
     args.append("--json")
@@ -146,6 +157,23 @@ TOOL_SCHEMAS = {
                 "jobs": {"type": "integer", "minimum": 0, "maximum": 1024},
             },
             "required": ["file"],
+            "additionalProperties": False,
+        },
+    },
+    "fastxl_search": {
+        "description": "Keyword or regex search across sheets; returns sheet, A1 ref, row/col, type, field and a context window.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string"},
+                "query": {"type": "string", "description": "Text or ECMAScript pattern to find"},
+                "regex": {"type": "boolean", "default": False},
+                "ignore_case": {"type": "boolean", "default": True},
+                "context": {"type": "integer", "minimum": 0, "maximum": 10},
+                "max_hits": {"type": "integer", "minimum": 0, "maximum": 1000000},
+                "sheet": {"type": ["string", "integer"]},
+            },
+            "required": ["file", "query"],
             "additionalProperties": False,
         },
     },

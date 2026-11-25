@@ -1,9 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
 
 namespace fastxl {
 
@@ -61,4 +65,97 @@ std::string_view to_string(ErrorCode code) noexcept;
 // `ErrorCode::Count` returns "internal sentinel; never reported".
 std::string_view to_explanation(ErrorCode code) noexcept;
 
+// std::error_code adapter. The category name is "fastxl"; messages use
+// to_explanation(). Internals still throw; these are boundary adapters.
+const std::error_category& fastxl_category() noexcept;
+std::error_code make_error_code(ErrorCode code) noexcept;
+
+struct Error {
+  ErrorCode code = ErrorCode::Internal;
+  std::string message;
+};
+
+// Non-throwing status for operations without a value.
+class Status {
+public:
+  Status() = default;
+  Status(Error error) : error_(std::move(error)) {}
+  explicit operator bool() const noexcept { return !error_.has_value(); }
+  const Error& error() const { return *error_; }
+
+private:
+  std::optional<Error> error_;
+};
+
+// Non-throwing result. value()/take() throw Exception when the result holds an
+// error, matching the throwing entry points.
+template <class T>
+class Result {
+public:
+  Result(T value) : value_(std::move(value)) {}
+  Result(Error error) : error_(std::move(error)) {}
+
+  bool has_value() const noexcept { return value_.has_value(); }
+  explicit operator bool() const noexcept { return has_value(); }
+
+  T& value() {
+    if (!value_) throw Exception(error_.code, error_.message);
+    return *value_;
+  }
+  const T& value() const {
+    if (!value_) throw Exception(error_.code, error_.message);
+    return *value_;
+  }
+  T&& take() {
+    if (!value_) throw Exception(error_.code, error_.message);
+    return std::move(*value_);
+  }
+  const Error& error() const { return error_; }
+  std::error_code code() const noexcept {
+    return value_ ? std::error_code{} : make_error_code(error_.code);
+  }
+
+private:
+  std::optional<T> value_;
+  Error error_{};
+};
+
+namespace detail {
+
+template <class Function>
+auto capture_result(Function&& function)
+    -> Result<std::invoke_result_t<Function>> {
+  try {
+    return Result<std::invoke_result_t<Function>>(
+        std::forward<Function>(function)());
+  } catch (const Exception& error) {
+    return Error{error.code(), error.what()};
+  } catch (const std::exception& error) {
+    return Error{ErrorCode::Internal, error.what()};
+  } catch (...) {
+    return Error{ErrorCode::Internal, "unknown error"};
+  }
+}
+
+template <class Function>
+auto capture_status(Function&& function) -> Status {
+  try {
+    std::forward<Function>(function)();
+    return Status{};
+  } catch (const Exception& error) {
+    return Status{Error{error.code(), error.what()}};
+  } catch (const std::exception& error) {
+    return Status{Error{ErrorCode::Internal, error.what()}};
+  } catch (...) {
+    return Status{Error{ErrorCode::Internal, "unknown error"}};
+  }
+}
+
+} // namespace detail
+
 } // namespace fastxl
+
+namespace std {
+template <>
+struct is_error_code_enum<fastxl::ErrorCode> : true_type {};
+} // namespace std

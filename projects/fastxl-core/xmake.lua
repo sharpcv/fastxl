@@ -9,16 +9,40 @@ after_build(function (target)
           include_dir)
 end)
 add_files("src/*.cpp")
+add_files("src/simd/dispatch.cpp")
+if is_arch("x64", "x86_64") then
+    if is_plat("windows") then
+        add_files("src/simd/avx2.cpp", {cxflags = "/arch:AVX2"})
+    else
+        add_files("src/simd/avx2.cpp", {cxflags = "-mavx2"})
+    end
+end
+if is_arch("arm64", "aarch64") then
+    add_files("src/simd/neon.cpp")
+end
 if is_plat("windows") then
     add_files("src/platform/atomic_win32.cpp")
+    add_files("src/platform/mapped_win32.cpp")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN", "_CRT_SECURE_NO_WARNINGS")
 else
     add_files("src/platform/atomic_posix.cpp")
+    add_files("src/platform/mapped_posix.cpp")
 end
 add_includedirs("include", {public = true})
 add_includedirs("src")
-add_packages("minizip-ng", "fast_float", "simdutf", "fmt", "nlohmann_json", {public = true})
+add_packages("minizip-ng", "fast_float", "simdutf", "fmt", "nlohmann_json", "zlib-ng",
+             {public = true})
 add_headerfiles("include/(fastxl/*.hpp)")
+on_install(function (target)
+    local prefix = target:installdir()
+    local lib_dir = path.join(prefix, "lib")
+    local include_dir = path.join(prefix, "include")
+    os.mkdir(lib_dir)
+    os.mkdir(include_dir)
+    os.cp(target:targetfile(), lib_dir)
+    os.cp(path.join(os.projectdir(), "projects", "fastxl-core", "include", "fastxl"),
+           include_dir)
+end)
 if is_plat("windows") then
     add_cxflags("/W4", "/permissive-")
 else

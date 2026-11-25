@@ -89,4 +89,27 @@ std::string_view to_explanation(ErrorCode code) noexcept {
   return "internal sentinel; never reported";
 }
 
+namespace {
+
+class FastxlErrorCategory final : public std::error_category {
+public:
+  const char* name() const noexcept override { return "fastxl"; }
+  std::string message(int condition) const override {
+    if (condition < 0 || condition >= static_cast<int>(ErrorCode::Count))
+      return "unknown fastxl error";
+    return std::string(to_explanation(static_cast<ErrorCode>(condition)));
+  }
+};
+
+} // namespace
+
+const std::error_category& fastxl_category() noexcept {
+  static const FastxlErrorCategory category;
+  return category;
+}
+
+std::error_code make_error_code(ErrorCode code) noexcept {
+  return {static_cast<int>(code), fastxl_category()};
+}
+
 } // namespace fastxl

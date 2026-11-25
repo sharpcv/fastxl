@@ -74,6 +74,17 @@ std::unique_ptr<Writer> open_writer(const std::filesystem::path& path,
   throw_error(ErrorCode::UnsupportedFormat, "unsupported table format");
 }
 
+Result<std::unique_ptr<Reader>> try_open_reader(const std::filesystem::path& path,
+                                                const ReadOptions& options) {
+  return detail::capture_result([&] { return open_reader(path, options); });
+}
+
+Result<std::unique_ptr<Writer>> try_open_writer(
+    const std::filesystem::path& path, std::span<const std::string_view> columns,
+    const WriteOptions& options) {
+  return detail::capture_result([&] { return open_writer(path, columns, options); });
+}
+
 std::unique_ptr<Reader> open_reader(std::istream& stream, Format format,
                                     const ReadOptions& options) {
   if (format == Format::Auto)

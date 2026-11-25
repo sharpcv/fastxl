@@ -107,9 +107,14 @@ namespace {
 
 class SummarySink : public SaxHandler {
 public:
-  explicit SummarySink(uint32_t max_rows) : max_rows_(max_rows) {}
+  SummarySink(uint32_t max_rows, uint32_t first_row, uint32_t last_row, uint32_t first_col,
+              uint32_t last_col)
+      : max_rows_(max_rows), first_row_(first_row), last_row_(last_row),
+        first_col_(first_col), last_col_(last_col) {}
 
   bool on_row_begin(uint32_t row) override {
+    skip_row_ = row < first_row_ || (last_row_ != 0 && row > last_row_);
+    if (skip_row_) return true;
     if (rows_.size() >= max_rows_) return false;
     rows_.push_back({});
     rows_.back().number = row;
@@ -117,6 +122,8 @@ public:
   }
 
   bool on_cell(const CellView& cell) override {
+    if (skip_row_) return true;
+    if (cell.col < first_col_ || (last_col_ != 0 && cell.col > last_col_)) return true;
     if (rows_.empty()) return true;
     if (cell.type == CellType::Null) return true;
     if ((cell.type == CellType::Text || cell.type == CellType::SharedString) &&
@@ -140,6 +147,11 @@ public:
 
 private:
   uint32_t max_rows_;
+  uint32_t first_row_;
+  uint32_t last_row_;
+  uint32_t first_col_;
+  uint32_t last_col_;
+  bool skip_row_ = false;
   std::vector<RowSummary> rows_;
   std::string auto_filter_;
   uint32_t pane_top_row_ = 0;
@@ -147,10 +159,36 @@ private:
 
 } // namespace
 
-HeaderChoice detect_header_xlsx(const WorkBook& workbook, size_t sheet, uint32_t max_rows) {
-  SummarySink sink(max_rows);
+HeaderChoice detect_header_xlsx(const WorkBook& workbook, size_t sheet, uint32_t max_rows,
+                                uint32_t first_row, uint32_t last_row, uint32_t first_col,
+                                uint32_t last_col) {
+  SummarySink sink(max_rows, first_row, last_row, first_col, last_col);
   workbook.read_sheet(sheet, sink);
   return detect_header(sink.rows(), sink.auto_filter(), sink.pane_top_row());
+}
+
+std::vector<SheetProfile> profile_regions(const WorkBook& workbook, size_t sheet,
+                                          const ProfileOptions& options, bool header_auto) {
+  std::vector<SheetProfile> profiles;
+  for (const MergeRange& region : detect_regions(workbook, sheet)) {
+    ProfileOptions region_options = options;
+    region_options.first_row = region.first_row;
+    region_options.last_row = region.last_row;
+    region_options.first_col = region.first_col;
+    region_options.last_col = region.last_col;
+    if (header_auto) {
+      region_options.header_row =
+          detect_header_xlsx(workbook, sheet, 20, region.first_row, region.last_row,
+                             region.first_col, region.last_col)
+              .row;
+    } else if (options.header_row < region.first_row || options.header_row > region.last_row) {
+      region_options.header_row = 0;
+    }
+    SheetProfile profile = profile_sheet(workbook, sheet, region_options);
+    profile.range = range_ref(region);
+    profiles.push_back(std::move(profile));
+  }
+  return profiles;
 }
 
 HeaderChoice detect_header_table(Reader& reader, uint32_t max_rows) {

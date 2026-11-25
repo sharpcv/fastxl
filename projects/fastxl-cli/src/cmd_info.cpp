@@ -9,6 +9,7 @@
 
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
+#include "metadata_json.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -67,9 +68,12 @@ int run_info(const Args& args) {
   root["size_bytes"] = size_bytes;
   root["date1904"] = workbook.date_1904();
   root["shared_strings"] = workbook.shared_string_count();
+  root["defined_names"] = defined_names_json(workbook.defined_names());
+  if (workbook.defined_names_truncated()) root["defined_names_truncated"] = true;
   Json sheets = Json::array();
   for (size_t i = 0; i < workbook.sheets().size(); ++i) {
     const WorkSheet& sheet = workbook.sheets()[i];
+    const SheetMetadata& metadata = workbook.sheet_metadata(i);
     Json entry;
     entry["index"] = i;
     entry["name"] = sheet.name();
@@ -79,6 +83,11 @@ int run_info(const Args& args) {
     entry["kind"] = std::string(sheet_kind_name(sheet.kind()));
     entry["state"] = std::string(sheet_state_name(sheet.state()));
     entry["uncompressed_bytes"] = sheet.uncompressed_bytes();
+    entry["tables"] = tables_json(metadata.tables);
+    if (metadata.tables_truncated) entry["tables_truncated"] = true;
+    entry["comments_count"] = metadata.comments_total;
+    entry["pivot_tables_count"] = metadata.pivot_tables_total;
+    entry["charts_count"] = metadata.charts_total;
     sheets.push_back(std::move(entry));
   }
   root["sheets"] = std::move(sheets);

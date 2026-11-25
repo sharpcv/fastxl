@@ -12,3 +12,8 @@ elseif is_plat("linux") then
     add_ldflags("-pthread")
 end
 set_rundir("$(projectdir)")
+on_install(function (target)
+    local bin_dir = path.join(target:installdir(), "bin")
+    os.mkdir(bin_dir)
+    os.cp(target:targetfile(), bin_dir)
+end)

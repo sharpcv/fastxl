@@ -8,6 +8,7 @@
 
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "metadata_json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -228,11 +229,32 @@ Json profile_json(const SheetProfile& profile) {
       top.push_back({{"value", value.value}, {"count", value.count}});
     entry["top_values"] = std::move(top);
     entry["enum_values"] = column.enum_values;
+    entry["enum_values_truncated"] = column.enum_values_truncated;
     entry["flags"] = column.flags;
+    if (!column.num_fmt.empty()) entry["num_fmt"] = column.num_fmt;
+    if (!column.style_flags.empty()) entry["style_flags"] = column.style_flags;
+    entry["formula_cells"] = column.formula_cells;
     columns.push_back(std::move(entry));
   }
   root["columns"] = std::move(columns);
   root["issues"] = profile.issues;
+  root["merged_cells"] = profile.merged_cells;
+  root["merged_cells_truncated"] = profile.merged_cells_truncated;
+  root["hidden_rows"] = profile.hidden_rows;
+  root["hidden_rows_truncated"] = profile.hidden_rows_truncated;
+  root["filter_columns"] = fastxl_cli::filter_columns_json(profile.filter_columns);
+  root["uncached_formulas"] = profile.uncached_formulas;
+  Json links = Json::array();
+  for (const FormulaLink& link : profile.formula_links) {
+    Json refs = Json::array();
+    for (const FormulaRef& ref : link.refs)
+      refs.push_back({{"sheet", ref.sheet}, {"ref", ref.ref}});
+    links.push_back({{"cell", link.cell}, {"formula", link.formula}, {"refs", std::move(refs)}});
+  }
+  root["formula_links"] = std::move(links);
+  root["formula_links_truncated"] = profile.formula_links_truncated;
+  if (!profile.range.empty()) root["range"] = profile.range;
+  fastxl_cli::add_sheet_metadata(root, profile.metadata);
   return root;
 }
 
@@ -306,7 +328,11 @@ Json schema_column_json(const Column& column, const std::string& name,
     top.push_back({{"value", value.value}, {"count", value.count}});
   entry["top_values"] = std::move(top);
   entry["enum_values"] = column.enum_values;
+  entry["enum_values_truncated"] = column.enum_values_truncated;
   entry["flags"] = column.flags;
+  if (!column.num_fmt.empty()) entry["num_fmt"] = column.num_fmt;
+  if (!column.style_flags.empty()) entry["style_flags"] = column.style_flags;
+  entry["formula_cells"] = column.formula_cells;
   return entry;
 }
 
@@ -344,6 +370,23 @@ Json schema_section_json(const std::string& name, uint32_t index, std::string_vi
   }
   section["columns"] = std::move(columns);
   section["issues"] = profile.issues;
+  if (!profile.range.empty()) section["range"] = profile.range;
+  section["merged_cells"] = profile.merged_cells;
+  section["merged_cells_truncated"] = profile.merged_cells_truncated;
+  section["hidden_rows"] = profile.hidden_rows;
+  section["hidden_rows_truncated"] = profile.hidden_rows_truncated;
+  section["filter_columns"] = fastxl_cli::filter_columns_json(profile.filter_columns);
+  section["uncached_formulas"] = profile.uncached_formulas;
+  Json links = Json::array();
+  for (const FormulaLink& link : profile.formula_links) {
+    Json refs = Json::array();
+    for (const FormulaRef& ref : link.refs)
+      refs.push_back({{"sheet", ref.sheet}, {"ref", ref.ref}});
+    links.push_back({{"cell", link.cell}, {"formula", link.formula}, {"refs", std::move(refs)}});
+  }
+  section["formula_links"] = std::move(links);
+  section["formula_links_truncated"] = profile.formula_links_truncated;
+  fastxl_cli::add_sheet_metadata(section, profile.metadata);
   return section;
 }
 
@@ -370,6 +413,7 @@ struct ProbeArgs {
   size_t top = 5;
   size_t distinct_cap = 10000;
   unsigned jobs = 0;
+  bool regions = false;
 };
 
 ProfileOptions profile_options(const ProbeArgs& args) {
@@ -402,18 +446,30 @@ char resolved_delimiter(const ProbeArgs& args, const std::filesystem::path& path
   return delimiter;
 }
 
-SheetProfile build_profile(const ProbeArgs& args) {
+struct ProbeBuild {
+  SheetProfile profile;
+  std::vector<DefinedName> defined_names;
+};
+
+ProbeBuild build_profile(const ProbeArgs& args) {
   const Format format = resolve_format(args.file, args.format);
   const std::filesystem::path path = utf8_path(args.file);
   ProfileOptions options = profile_options(args);
+  ProbeBuild build;
 
   if (format == Format::Xlsx) {
     WorkBook workbook = WorkBook::open(path);
     const size_t index = resolve_sheet_index(workbook, args.sheet);
     if (args.header_auto) options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
-    SheetProfile profile = profile_sheet(workbook, index, options);
-    profile.file = args.file;
-    return profile;
+    build.profile = profile_sheet(workbook, index, options);
+    build.profile.file = args.file;
+    build.defined_names.assign(workbook.defined_names().begin(),
+                               workbook.defined_names().end());
+    if (args.regions) {
+      build.profile.regions =
+          fastxl_cli::profile_regions(workbook, index, options, args.header_auto);
+    }
+    return build;
   }
 
   if (format != Format::Csv && format != Format::Jsonl)
@@ -439,9 +495,9 @@ SheetProfile build_profile(const ProbeArgs& args) {
   if (format == Format::Jsonl) options.header_row = 0;
   options_read.header_row = options.header_row;
   auto reader = open_reader(path, options_read);
-  SheetProfile profile = profile_table(*reader, options);
-  profile.file = args.file;
-  return profile;
+  build.profile = profile_table(*reader, options);
+  build.profile.file = args.file;
+  return build;
 }
 
 py::dict info(const std::string& file, const std::string& format_name) {
@@ -463,9 +519,12 @@ py::dict info(const std::string& file, const std::string& format_name) {
   root["size_bytes"] = size_bytes;
   root["date1904"] = workbook.date_1904();
   root["shared_strings"] = workbook.shared_string_count();
+  root["defined_names"] = fastxl_cli::defined_names_json(workbook.defined_names());
+  if (workbook.defined_names_truncated()) root["defined_names_truncated"] = true;
   Json sheets = Json::array();
   for (size_t i = 0; i < workbook.sheets().size(); ++i) {
     const WorkSheet& sheet = workbook.sheets()[i];
+    const SheetMetadata& metadata = workbook.sheet_metadata(i);
     Json entry;
     entry["index"] = i;
     entry["name"] = sheet.name();
@@ -475,6 +534,11 @@ py::dict info(const std::string& file, const std::string& format_name) {
     entry["kind"] = std::string(sheet.kind() == SheetKind::Worksheet ? "worksheet" : "chartsheet");
     entry["state"] = std::string(sheet_state_name(sheet.state()));
     entry["uncompressed_bytes"] = sheet.uncompressed_bytes();
+    entry["tables"] = fastxl_cli::tables_json(metadata.tables);
+    if (metadata.tables_truncated) entry["tables_truncated"] = true;
+    entry["comments_count"] = metadata.comments_total;
+    entry["pivot_tables_count"] = metadata.pivot_tables_total;
+    entry["charts_count"] = metadata.charts_total;
     sheets.push_back(std::move(entry));
   }
   root["sheets"] = std::move(sheets);
@@ -484,7 +548,7 @@ py::dict info(const std::string& file, const std::string& format_name) {
 py::dict probe(const std::string& file, py::object sheet, py::object header_row,
                const std::string& format, bool infer, std::string delimiter,
                bool fill_gaps, size_t max_rows, size_t sample, size_t top,
-               size_t distinct_cap, unsigned jobs) {
+               size_t distinct_cap, unsigned jobs, bool regions) {
   ProbeArgs args;
   args.file = file;
   args.sheet = sheet_selector(sheet);
@@ -497,17 +561,32 @@ py::dict probe(const std::string& file, py::object sheet, py::object header_row,
   args.top = top;
   args.distinct_cap = distinct_cap;
   args.jobs = jobs;
+  args.regions = regions;
   args.header_row = header_value(header_row, args.header_auto);
-  SheetProfile profile = build_profile(args);
-  Json root = profile_json(profile);
+  ProbeBuild build = build_profile(args);
+  Json root = profile_json(build.profile);
   root["header_auto"] = args.header_auto;
+  root["defined_names"] = fastxl_cli::defined_names_json(build.defined_names);
+  if (!build.profile.regions.empty()) {
+    Json regions_json = Json::array();
+    for (const SheetProfile& region : build.profile.regions) {
+      Json entry = profile_json(region);
+      entry.erase("tables");
+      entry.erase("tables_truncated");
+      entry.erase("comments");
+      entry.erase("pivot_tables");
+      entry.erase("charts");
+      regions_json.push_back(std::move(entry));
+    }
+    root["regions"] = std::move(regions_json);
+  }
   return json_to_py(root).cast<py::dict>();
 }
 
 py::dict schema(const std::string& file, py::object sheet, py::object header_row,
                 const std::string& format, bool infer, std::string delimiter,
                 bool fill_gaps, size_t max_rows, size_t sample, size_t top,
-                size_t distinct_cap, unsigned jobs) {
+                size_t distinct_cap, unsigned jobs, bool regions) {
   ProbeArgs args;
   args.file = file;
   args.sheet = sheet_selector(sheet);
@@ -520,6 +599,7 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
   args.top = top;
   args.distinct_cap = distinct_cap;
   args.jobs = jobs;
+  args.regions = regions;
   args.header_row = header_value(header_row, args.header_auto);
 
   const Format resolved = resolve_format(file, format);
@@ -530,10 +610,16 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
   root["format"] = std::string(to_string(resolved));
   root["header_auto"] = args.header_auto;
   Json sheets = Json::array();
+  std::vector<DefinedName> defined_names;
+  bool defined_names_truncated = false;
+  std::vector<SheetProfile> profiles;
+  std::vector<std::pair<std::string, const SheetProfile*>> join_sheets;
 
   if (resolved == Format::Xlsx) {
     const std::filesystem::path path = utf8_path(file);
     WorkBook workbook = WorkBook::open(path);
+    defined_names.assign(workbook.defined_names().begin(), workbook.defined_names().end());
+    defined_names_truncated = workbook.defined_names_truncated();
     std::vector<size_t> indices;
     if (!args.sheet.empty()) {
       indices.push_back(resolve_sheet_index(workbook, args.sheet));
@@ -542,24 +628,59 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
         if (workbook.sheets()[i].kind() == SheetKind::Worksheet) indices.push_back(i);
       }
     }
+    std::vector<ProfileOptions> sheet_options;
+    sheet_options.reserve(indices.size());
     for (size_t index : indices) {
       ProfileOptions options = profile_options(args);
-      if (args.header_auto) options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
-      SheetProfile profile = profile_sheet(workbook, index, options);
+      if (args.header_auto)
+        options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
+      sheet_options.push_back(options);
+    }
+    std::vector<SheetProfile> sheet_profiles =
+        profile_sheets(workbook, indices, std::span<const ProfileOptions>(sheet_options));
+    profiles = std::move(sheet_profiles);
+    if (args.regions) {
+      for (size_t i = 0; i < indices.size(); ++i) {
+        profiles[i].regions =
+            fastxl_cli::profile_regions(workbook, indices[i], sheet_options[i],
+                                        args.header_auto);
+      }
+    }
+    join_sheets.reserve(indices.size());
+    for (size_t i = 0; i < indices.size(); ++i) {
+      const size_t index = indices[i];
+      SheetProfile& profile = profiles[i];
       profile.file = file;
-      sheets.push_back(schema_section_json(std::string(workbook.sheets()[index].name()),
-                                           static_cast<uint32_t>(index),
-                                           sheet_state_name(workbook.sheets()[index].state()),
-                                           profile));
+      const std::string name = std::string(workbook.sheets()[index].name());
+      join_sheets.emplace_back(name, &profile);
+      const std::string_view state = sheet_state_name(workbook.sheets()[index].state());
+      Json section = schema_section_json(name, static_cast<uint32_t>(index), state, profile);
+      if (!profile.regions.empty()) {
+        Json regions_json = Json::array();
+        for (const SheetProfile& region : profile.regions) {
+          Json entry = schema_section_json(name, static_cast<uint32_t>(index), state, region);
+          entry.erase("tables");
+          entry.erase("tables_truncated");
+          entry.erase("comments");
+          entry.erase("pivot_tables");
+          entry.erase("charts");
+          regions_json.push_back(std::move(entry));
+        }
+        section["regions"] = std::move(regions_json);
+      }
+      sheets.push_back(std::move(section));
     }
   } else if (resolved == Format::Csv || resolved == Format::Jsonl) {
-    SheetProfile profile = build_profile(args);
+    SheetProfile profile = build_profile(args).profile;
     sheets.push_back(schema_section_json(args.sheet.empty() ? "table" : args.sheet, 0, {},
                                          profile));
   } else {
     throw Exception(ErrorCode::UnsupportedFormat, "schema supports xlsx, csv and jsonl");
   }
   root["sheets"] = std::move(sheets);
+  root["defined_names"] = fastxl_cli::defined_names_json(defined_names);
+  if (defined_names_truncated) root["defined_names_truncated"] = true;
+  root["join_keys"] = fastxl_cli::join_keys_json(join_sheets);
   return json_to_py(root).cast<py::dict>();
 }
 
@@ -595,21 +716,6 @@ py::object cell_to_py(const CellView& cell, std::string& scratch) {
   }
   }
   return py::none();
-}
-
-std::string column_letter(uint32_t col) {
-  std::string letters;
-  while (col > 0) {
-    const uint32_t remainder = (col - 1) % 26;
-    letters.push_back(static_cast<char>('A' + remainder));
-    col = (col - 1) / 26;
-  }
-  std::reverse(letters.begin(), letters.end());
-  return letters;
-}
-
-std::string cell_ref(uint32_t row, uint32_t col) {
-  return column_letter(col) + std::to_string(row);
 }
 
 std::string_view preview_type_name(CellType type) {
@@ -696,17 +802,35 @@ py::dict read_rows(const std::string& file, py::object sheet, py::object header_
       py::dict record;
       record["number"] = row.number;
       py::list cell_list;
+      const SheetStyle* styles = reader->styles();
       for (size_t i = 0; i < row.size(); ++i) {
         const CellView& cell = row[i];
         if (cell.type == CellType::Null && !cell.has_formula) continue;
         py::dict item;
         item["col"] = cell.col;
-        item["letter"] = column_letter(cell.col);
-        item["ref"] = cell_ref(cell.row, cell.col);
+        item["letter"] = column_letters(cell.col);
+        item["ref"] = fastxl::cell_ref(cell.row, cell.col);
         item["type"] = std::string(preview_type_name(cell.type));
         item["text"] = std::string(to_text(cell, scratch));
         if (cell.has_formula && !cell.formula.empty())
           item["formula"] = std::string(cell.formula);
+        if (styles != nullptr) {
+          const CellStyleInfo info = styles->info(cell.style);
+          if (!info.num_fmt.empty() && info.num_fmt != "General")
+            item["num_fmt"] = std::string(info.num_fmt);
+          py::list style_flags;
+          if (info.flags.has_font_color) {
+            style_flags.append("font_color");
+            item["font_color"] = fastxl_cli::color_hex(info.flags.font_color);
+          }
+          if (info.flags.has_fill) {
+            style_flags.append("fill");
+            item["fill_color"] = fastxl_cli::color_hex(info.flags.fill_color);
+          }
+          if (info.flags.strike) style_flags.append("strike");
+          if (py::len(style_flags) > 0) item["style_flags"] = std::move(style_flags);
+        }
+        if (cell.type == CellType::Null && cell.has_formula) item["needs_recalc"] = true;
         cell_list.append(std::move(item));
       }
       record["cells"] = std::move(cell_list);
@@ -757,6 +881,75 @@ py::dict read_rows(const std::string& file, py::object sheet, py::object header_
   root["rows_read"] = emitted;
   root["extra_cells"] = reader->extra_cells();
   return root;
+}
+
+py::dict search(const std::string& file, const std::string& query, bool regex,
+                bool ignore_case, uint32_t context, size_t max_hits,
+                size_t max_cell_bytes, py::object sheet, const std::string& format) {
+  const Format resolved = resolve_format(file, format);
+  const std::filesystem::path path = utf8_path(file);
+  SearchOptions options;
+  options.query = query;
+  options.regex = regex;
+  options.ignore_case = ignore_case;
+  options.context = context;
+  options.max_hits = max_hits;
+  options.max_cell_bytes = max_cell_bytes;
+  options.sheet = sheet_selector(sheet);
+
+  SearchResult result;
+  if (resolved == Format::Xlsx) {
+    WorkBook workbook = WorkBook::open(path);
+    result = search_workbook(workbook, options);
+  } else if (resolved == Format::Csv || resolved == Format::Jsonl) {
+    ReadOptions read_options;
+    read_options.format = resolved;
+    read_options.header_row = 0;
+    read_options.infer_types = true;
+    read_options.sheet = options.sheet;
+    if (resolved == Format::Csv) {
+      char delimiter = '\0';
+      if (is_tsv(path)) delimiter = '\t';
+      if (delimiter == '\0') delimiter = ',';
+      read_options.column_count = fastxl_cli::csv_column_count(path, delimiter, 0);
+    }
+    auto reader = open_reader(path, read_options);
+    result = search_table(*reader, options);
+  } else {
+    throw Exception(ErrorCode::UnsupportedFormat, "search supports xlsx, csv and jsonl");
+  }
+
+  Json root;
+  root["version"] = 1;
+  root["ok"] = true;
+  root["file"] = file;
+  root["query"] = query;
+  root["regex"] = regex;
+  root["ignore_case"] = ignore_case;
+  Json matches = Json::array();
+  for (const SearchHit& hit : result.hits) {
+    Json entry;
+    entry["sheet"] = hit.sheet;
+    entry["sheet_index"] = hit.sheet_index;
+    entry["ref"] = hit.ref;
+    entry["row"] = hit.row;
+    entry["col"] = hit.col;
+    entry["type"] = hit.type;
+    entry["field"] = hit.field;
+    entry["text"] = hit.text;
+    if (!hit.context.empty()) {
+      Json context_json = Json::array();
+      for (const SearchCell& cell : hit.context)
+        context_json.push_back({{"ref", cell.ref}, {"text", cell.text}});
+      entry["context"] = std::move(context_json);
+    }
+    matches.push_back(std::move(entry));
+  }
+  root["matches"] = std::move(matches);
+  root["match_count"] = result.hits.size();
+  root["truncated"] = result.truncated;
+  root["searched_cells"] = result.searched_cells;
+  return json_to_py(root).cast<py::dict>();
 }
 
 py::dict preview(const std::string& file, py::object sheet, py::object header_row,
@@ -898,13 +1091,13 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
-        py::arg("distinct_cap") = 10000, py::arg("jobs") = 0,
+        py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
         "Compact column schema for code generation.");
   m.def("probe", &probe, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
-        py::arg("distinct_cap") = 10000, py::arg("jobs") = 0,
+        py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
         "Full per-column profile with type histogram and stats.");
   m.def("read_rows", &read_rows, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
@@ -912,6 +1105,11 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_columns") = 16384, py::arg("with_cells") = false,
         "Read typed rows as dicts (or lists when as_dicts=False).");
+  m.def("search", &search, py::arg("file"), py::arg("query"), py::arg("regex") = false,
+        py::arg("ignore_case") = true, py::arg("context") = 1,
+        py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
+        py::arg("sheet") = py::none(), py::arg("format") = "",
+        "Keyword/regex search with A1 hits and context windows.");
   m.def("preview", &preview, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,

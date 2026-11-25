@@ -12,6 +12,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "metadata_json.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -96,11 +97,45 @@ Json profile_json(const SheetProfile& profile) {
       top.push_back({{"value", value.value}, {"count", value.count}});
     entry["top_values"] = std::move(top);
     entry["enum_values"] = column.enum_values;
+    entry["enum_values_truncated"] = column.enum_values_truncated;
     entry["flags"] = column.flags;
+    if (!column.num_fmt.empty()) entry["num_fmt"] = column.num_fmt;
+    if (!column.style_flags.empty()) entry["style_flags"] = column.style_flags;
+    entry["formula_cells"] = column.formula_cells;
     columns.push_back(std::move(entry));
   }
   root["columns"] = std::move(columns);
   root["issues"] = profile.issues;
+  root["merged_cells"] = profile.merged_cells;
+  root["merged_cells_truncated"] = profile.merged_cells_truncated;
+  root["hidden_rows"] = profile.hidden_rows;
+  root["hidden_rows_truncated"] = profile.hidden_rows_truncated;
+  root["filter_columns"] = filter_columns_json(profile.filter_columns);
+  root["uncached_formulas"] = profile.uncached_formulas;
+  Json links = Json::array();
+  for (const FormulaLink& link : profile.formula_links) {
+    Json refs = Json::array();
+    for (const FormulaRef& ref : link.refs)
+      refs.push_back({{"sheet", ref.sheet}, {"ref", ref.ref}});
+    links.push_back({{"cell", link.cell}, {"formula", link.formula}, {"refs", std::move(refs)}});
+  }
+  root["formula_links"] = std::move(links);
+  root["formula_links_truncated"] = profile.formula_links_truncated;
+  if (!profile.range.empty()) root["range"] = profile.range;
+  add_sheet_metadata(root, profile.metadata);
+  if (!profile.regions.empty()) {
+    Json regions = Json::array();
+    for (const SheetProfile& region : profile.regions) {
+      Json entry = profile_json(region);
+      entry.erase("tables");
+      entry.erase("tables_truncated");
+      entry.erase("comments");
+      entry.erase("pivot_tables");
+      entry.erase("charts");
+      regions.push_back(std::move(entry));
+    }
+    root["regions"] = std::move(regions);
+  }
   return root;
 }
 
@@ -260,6 +295,7 @@ int run_probe(const Args& args) {
   profile_options.jobs = args.jobs;
 
   SheetProfile profile;
+  std::vector<DefinedName> defined_names;
   if (format == Format::Xlsx) {
     WorkBook workbook = WorkBook::open(path);
     const size_t index = resolve_sheet_index(workbook, args.sheet);
@@ -267,6 +303,10 @@ int run_probe(const Args& args) {
       profile_options.header_row = detect_header_xlsx(workbook, index).row;
     profile = profile_sheet(workbook, index, profile_options);
     profile.file = input;
+    defined_names.assign(workbook.defined_names().begin(), workbook.defined_names().end());
+    if (args.regions)
+      profile.regions =
+          profile_regions(workbook, index, profile_options, args.header_auto);
   } else if (format == Format::Csv || format == Format::Jsonl) {
     ReadOptions read_options;
     read_options.format = format;
@@ -302,6 +342,7 @@ int run_probe(const Args& args) {
 
   Json root = profile_json(profile);
   root["header_auto"] = args.header_auto;
+  root["defined_names"] = defined_names_json(defined_names);
   if (args.format == OutputFormat::Jsonl) {
     fmt::print("{}\n", root.dump());
   } else if (args.format == OutputFormat::Table) {

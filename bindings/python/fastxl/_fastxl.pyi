@@ -14,15 +14,86 @@ class Error(RuntimeError):
 
     code: str
 
+class DefinedName(TypedDict):
+    name: str
+    ref: str
+    local_sheet_index: NotRequired[int]
+    hidden: NotRequired[bool]
+
+class TableInfo(TypedDict):
+    name: str
+    ref: str
+    columns: list[str]
+    header_rows: int
+    columns_truncated: NotRequired[bool]
+
+class CommentItem(TypedDict):
+    ref: str
+    author: str
+    text: str
+
+class CommentsInfo(TypedDict):
+    count: int
+    items: list[CommentItem]
+    truncated: bool
+
+class PivotTableInfo(TypedDict):
+    name: str
+    part: str
+    cache_id: int
+    source_sheet: NotRequired[str]
+    source_ref: NotRequired[str]
+
+class ChartRef(TypedDict):
+    sheet: str
+    ref: str
+
+class ChartInfo(TypedDict):
+    part: str
+    refs: list[ChartRef]
+
+class FilterCondition(TypedDict):
+    operator: str
+    value: str
+
+class FilterColumn(TypedDict):
+    column: int
+    values: list[str]
+    custom: list[FilterCondition]
+
+class FormulaRef(TypedDict):
+    sheet: str
+    ref: str
+
+class FormulaLink(TypedDict):
+    cell: str
+    formula: str
+    refs: list[FormulaRef]
+
+class JoinKey(TypedDict):
+    left_sheet: str
+    left_column: int
+    left_name: str
+    right_sheet: str
+    right_column: int
+    right_name: str
+    reason: Literal["same_name", "value_overlap"]
+    overlap: NotRequired[float]
+
 class InfoSheet(TypedDict):
     index: int
     name: str
-    sheet_id: str
+    sheet_id: int
     rel_id: str
     part: str
     kind: Literal["worksheet", "chartsheet"]
     state: str
     uncompressed_bytes: int
+    tables: NotRequired[list[TableInfo]]
+    tables_truncated: NotRequired[bool]
+    comments_count: NotRequired[int]
+    pivot_tables_count: NotRequired[int]
+    charts_count: NotRequired[int]
 
 class InfoResult(TypedDict):
     version: int
@@ -32,6 +103,8 @@ class InfoResult(TypedDict):
     date1904: bool
     shared_strings: int
     sheets: list[InfoSheet]
+    defined_names: NotRequired[list[DefinedName]]
+    defined_names_truncated: NotRequired[bool]
 
 class NumericStats(TypedDict):
     any: bool
@@ -68,6 +141,10 @@ class ColumnProfile(TypedDict):
     top_values: list[TopValue]
     enum_values: list[str]
     flags: list[str]
+    enum_values_truncated: NotRequired[bool]
+    num_fmt: NotRequired[str]
+    style_flags: NotRequired[list[str]]
+    formula_cells: NotRequired[int]
 
 class SheetSection(TypedDict):
     name: str
@@ -87,6 +164,21 @@ class SheetSection(TypedDict):
     hidden_columns: list[int]
     columns: list[ColumnProfile]
     issues: list[str]
+    range: NotRequired[str]
+    merged_cells: NotRequired[list[str]]
+    merged_cells_truncated: NotRequired[bool]
+    hidden_rows: NotRequired[list[int]]
+    hidden_rows_truncated: NotRequired[bool]
+    filter_columns: NotRequired[list[FilterColumn]]
+    uncached_formulas: NotRequired[int]
+    formula_links: NotRequired[list[FormulaLink]]
+    formula_links_truncated: NotRequired[bool]
+    tables: NotRequired[list[TableInfo]]
+    tables_truncated: NotRequired[bool]
+    comments: NotRequired[CommentsInfo]
+    pivot_tables: NotRequired[list[PivotTableInfo]]
+    charts: NotRequired[list[ChartInfo]]
+    regions: NotRequired[list["SheetSection"]]
 
 class SchemaResult(TypedDict):
     version: int
@@ -95,6 +187,9 @@ class SchemaResult(TypedDict):
     format: str
     header_auto: bool
     sheets: list[SheetSection]
+    defined_names: NotRequired[list[DefinedName]]
+    defined_names_truncated: NotRequired[bool]
+    join_keys: NotRequired[list[JoinKey]]
 
 class ProbeResult(TypedDict):
     version: int
@@ -117,6 +212,22 @@ class ProbeResult(TypedDict):
     columns: list[ColumnProfile]
     issues: list[str]
     header_auto: bool
+    defined_names: NotRequired[list[DefinedName]]
+    merged_cells: NotRequired[list[str]]
+    merged_cells_truncated: NotRequired[bool]
+    hidden_rows: NotRequired[list[int]]
+    hidden_rows_truncated: NotRequired[bool]
+    filter_columns: NotRequired[list[FilterColumn]]
+    uncached_formulas: NotRequired[int]
+    formula_links: NotRequired[list[FormulaLink]]
+    formula_links_truncated: NotRequired[bool]
+    tables: NotRequired[list[TableInfo]]
+    tables_truncated: NotRequired[bool]
+    comments: NotRequired[CommentsInfo]
+    pivot_tables: NotRequired[list[PivotTableInfo]]
+    charts: NotRequired[list[ChartInfo]]
+    range: NotRequired[str]
+    regions: NotRequired[list[SheetSection]]
 
 class PreviewCell(TypedDict):
     col: int
@@ -125,6 +236,12 @@ class PreviewCell(TypedDict):
     type: str
     text: str
     formula: NotRequired[str]
+    truncated: NotRequired[bool]
+    num_fmt: NotRequired[str]
+    style_flags: NotRequired[list[str]]
+    font_color: NotRequired[str]
+    fill_color: NotRequired[str]
+    needs_recalc: NotRequired[bool]
 
 class PreviewRow(TypedDict):
     number: int
@@ -158,6 +275,33 @@ class PreviewResult(TypedDict):
     rows_read: int
     extra_cells: int
 
+class SearchContextCell(TypedDict):
+    ref: str
+    text: str
+
+class SearchMatch(TypedDict):
+    sheet: str
+    sheet_index: int
+    ref: str
+    row: int
+    col: int
+    type: str
+    field: Literal["text", "formula"]
+    text: str
+    context: NotRequired[list[SearchContextCell]]
+
+class SearchResult(TypedDict):
+    version: int
+    ok: bool
+    file: str
+    query: str
+    regex: bool
+    ignore_case: bool
+    matches: list[SearchMatch]
+    match_count: int
+    truncated: bool
+    searched_cells: int
+
 def info(file: str, format: str = "") -> InfoResult: ...
 def schema(
     file: str,
@@ -172,6 +316,7 @@ def schema(
     top: int = 5,
     distinct_cap: int = 10000,
     jobs: int = 0,
+    regions: bool = False,
 ) -> SchemaResult: ...
 def probe(
     file: str,
@@ -186,6 +331,7 @@ def probe(
     top: int = 5,
     distinct_cap: int = 10000,
     jobs: int = 0,
+    regions: bool = False,
 ) -> ProbeResult: ...
 def read_rows(
     file: str,
@@ -201,6 +347,17 @@ def read_rows(
     max_columns: int = 16384,
     with_cells: bool = False,
 ) -> PreviewResult: ...
+def search(
+    file: str,
+    query: str,
+    regex: bool = False,
+    ignore_case: bool = True,
+    context: int = 1,
+    max_hits: int = 100,
+    max_cell_bytes: int = 256,
+    sheet: SheetSelector = None,
+    format: str = "",
+) -> SearchResult: ...
 def preview(
     file: str,
     sheet: SheetSelector = None,

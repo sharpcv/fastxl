@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
                  (FMT_VERSION / 100) % 100, FMT_VERSION % 100);
       fmt::print("  {:<14} {}.{}.{}\n", "nlohmann_json", NLOHMANN_JSON_VERSION_MAJOR,
                  NLOHMANN_JSON_VERSION_MINOR, NLOHMANN_JSON_VERSION_PATCH);
+      fmt::print("  {:<14} {}\n", "simd", fastxl::simd_backend());
       return 0;
     }
     if (!args.command.empty() && args.help) {
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
     if (args.command == "probe") return fastxl_cli::run_probe(args);
     if (args.command == "schema") return fastxl_cli::run_schema(args);
     if (args.command == "preview") return fastxl_cli::run_preview(args);
+    if (args.command == "search") return fastxl_cli::run_search(args);
     if (args.command == "convert") return fastxl_cli::run_convert(args);
     if (args.command == "errors") return fastxl_cli::run_errors(args);
     throw fastxl_cli::UsageError("unknown command: " + args.command);

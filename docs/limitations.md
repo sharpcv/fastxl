@@ -11,17 +11,22 @@ bytes, long paths and streamed xlsx.
   bzip2/lzma/zstd-compressed ZIP entries (rejected with
   `UnsupportedCompression`).
 - **No formulas**: cached values are read; `<f>` text is exposed as
-  `CellView::formula` (SAX) and `Cell::formula` (DOM), and formulas are dropped
-  on write. A formula cell with no cached value is emitted as a `null` cell
-  carrying `has_formula`, so probes report `has_formulas: true` instead of the
-  cell disappearing.
+  `CellView::formula` (SAX) and `Cell::formula` (DOM), and probes report
+  `formula_links`, `formula_cells` and `uncached_formulas`. A formula cell with
+  no cached value is emitted as a `null` cell carrying `has_formula` and
+  `needs_recalc`, so it is never silently treated as an ordinary blank. On
+  write, formula text is preserved as `<f>`; cached values are written when
+  present and no values are calculated.
 - **ZIP64 output relies on minizip AUTO mode**: large entries and entry counts
   above 65535 use ZIP64 (covered by an entry-count test); the >4 GiB
   single-entry path is not exercised by the test suite.
-- **Fixed style table**: 18 `cellXfs` (nine number formats plus bold variants).
-  No colors, borders, fonts beyond Calibri 11/bold, fills, alignment, row
-  heights, images, comments, hyperlinks, defined names, tables, pivots, charts.
-  Merged cells are supported on write (`WorkSheetWriter::merge_cells`).
+- **Limited write styles**: the 18 base `cellXfs` (nine number formats plus
+  bold variants) are retained, and `WorkBookWriter::register_style` adds custom
+  number formats, bold/italic/strike, font colors and solid fills. Borders,
+  alignment, themes, conditional formats, images, charts, comments and pivots
+  are still read-only or unsupported. Merged cells are supported on write
+  (`WorkSheetWriter::merge_cells`). Defined names, tables, comments, pivots and
+  charts are parsed on read but not written.
 - **Shared strings are deduplicated up to 512 MiB** (`BookWriteOptions`); beyond
   the cap new unique strings are written inline so output still succeeds.
   Inline-only output is available via `StringStorage::Inline`.
@@ -30,20 +35,32 @@ bytes, long paths and streamed xlsx.
 
 ## Reading
 
-- **No random access for large sheets**: `DomWorkBook` has **no default caps**
-  (set `DomOptions` limits to opt in) and materialises every cell, so memory
-  grows with the sheet; it is not recommended for large workbooks. Use
-  `WorkBook`/`SaxHandler` or `profile_sheet` there. A 642 MB sheet would need
-  gigabytes of DOM memory; [dom-optimization.md](dom-optimization.md) compares
-  the representation with calamine and lists the remaining compact-DOM work.
-- **Parallel profiling only in buffered mode**: sheet parts above
-  `OpenOptions::in_memory_threshold` (64 MiB) are streamed and profiled on one
-  thread; `jobs > 1` silently degrades (`parallel=false`). A 642 MB part is read
-  at ~2.7M cells/s, not faster with `--jobs 4`. The parallel path validates the
-  whole worksheet part (row payloads are validated by the fragment parsers)
-  before returning; malformed XML outside a row is rejected rather than
-  silently profiled. Validation errors report offsets in the elided structure
-  skeleton, not always the original byte offset.
+- **DOM is opt-in for large sheets**: `DomWorkBook` has a default
+  `max_memory_bytes` cap of 1 GiB (plus `max_cells`/`max_bytes` when set) and
+  materialises every cell, so memory grows with the sheet. Use
+  `WorkBook`/`SaxHandler`, `WorkBook::rows()` or `profile_sheet` for large
+  workbooks. [dom-optimization.md](dom-optimization.md) compares the
+  representation with calamine and lists the remaining compact-DOM work.
+- **Streamed parallel profiling**: sheet parts above
+  `OpenOptions::in_memory_threshold` (64 MiB) are split into complete `<row>`
+  fragments by a decompression producer and parsed by up to `--jobs` workers, so
+  `jobs > 1` no longer degrades to serial. Memory is bounded by one largest row
+  plus the fragment queue (2×jobs fragments or 64 MiB, whichever is smaller); a
+  single pathological row can exceed that budget. `--max-rows` keeps the serial
+  path because it stops early. Malformed XML outside a row is rejected by the
+  skeleton pass rather than silently profiled; an incomplete trailing row raises
+  `MalformedXml`.
+- **Read-only mapping**: when `OpenOptions::memory_map` is true (default) the ZIP
+  is mapped once and every per-call minizip reader works on that buffer. STORE
+  entries are parsed without copying; DEFLATE entries still decompress into a
+  buffer. Mapping is skipped for empty files, files above `INT32_MAX` (the
+  minizip buffer limit) and OS failures, falling back to the file API with
+  identical behavior. On Windows the mapping is created with share-delete so the
+  source can still be replaced; a long-lived MCP cache disables mapping anyway.
+- **SIMD dispatch**: XML scanning uses AVX2 on x86_64 when the CPU and OS support
+  it, SSE2 otherwise, and NEON on AArch64. `fastxl-cli --version` prints the
+  active backend. AVX2 is compiled in its own translation unit with per-file
+  flags; the rest of the library is baseline.
 - **Strict XML by default**: mismatched tags, unknown entities, control
   characters and invalid UTF-8 abort with `MalformedXml`/`InvalidUtf8`.
   `OpenOptions::lenient` only relaxes cell references/values, not XML.
@@ -108,10 +125,11 @@ bytes, long paths and streamed xlsx.
 - `top_values` is computed from the capped distinct map (10k default). When
   `distinct_capped` is true, values first seen after the cap are missing from
   the frequency list.
-- `enum_values` reads inline data-validation list formulas only (`"a,b,c"`).
-  Formulas that reference a range or another sheet are not resolved. Values are
-  capped at 64 per column, and a sqref covering more than 64 columns is
-  truncated.
+- `enum_values` reads inline data-validation lists (`"a,b,c"`) and resolves
+  same-workbook range references (for example `=Dict!$A$2:$A$20`). Values are
+  capped at 64 per column, `enum_values_truncated` reports a cut list, and a
+  sqref covering more than 64 columns is truncated. Missing sheets leave the
+  list empty rather than failing the probe.
 - Text that parses as ISO 8601 is classified as date/datetime. Other date
   spellings (for example `03/04/2024`) stay text/mixed.
 - CSV/JSONL Int cells carry exact `int_min`/`int_max`; `min`/`max`/`sum` remain
@@ -149,10 +167,10 @@ bytes, long paths and streamed xlsx.
   code points that are not valid XML characters. Values can change without an
   error.
 - **SAX metadata coverage**: dimension, column widths/hidden/style, row
-  height/hidden/style, panes, auto-filter, hyperlinks (resolved through sheet
-  rels) and data-validation type/sqref are reported. Tables, conditional
-  formatting, protected ranges, comments, drawings and validation formulas are
-  not.
+  height/hidden/style, panes, auto-filter (including per-column filter values and
+  custom conditions), merges, hyperlinks (resolved through sheet rels) and
+  data-validation type/sqref/formulas are reported. Conditional formatting,
+  protected ranges, defined-name-driven charts and threaded comments are not.
 - **`temp_dir` volume**: `WriteOptions::temp_dir` is checked against the target
   drive (`root_name`) when both are present; other volume mismatches surface as
   `AtomicReplaceFailed` rather than at creation. Atomic replace preserves the
@@ -161,9 +179,11 @@ bytes, long paths and streamed xlsx.
   prefixed with `\\?\` by the library before opening/creating files; relative
   long paths are resolved to absolute first. Deep directory *creation* in your
   own code still needs long-path support.
-- **Thread safety**: a `WorkBook` allows one active `WorkSheetReader`; parallel
-  profiling avoids the reader, but sharing a `WorkBook` across threads is not
-  supported. `WorkBookWriter` is single-threaded.
+- **Thread safety**: a `WorkBook` supports concurrent `read_sheet`/`open_sheet`
+  calls. Each reader owns an independent minizip stream; shared strings and the
+  style table are immutable after open. `WorkBookWriter` itself is not
+  thread-safe; with `BookWriteOptions::parallel`, pre-opened per-sheet handles
+  may each be driven by one thread, and `commit()` stays on the calling thread.
 - **Non-finite doubles**: rejected by the xlsx writer and by CSV/JSONL writers
   (`InvalidValue`), but `to_text` renders them as `nan`/`inf`/`-inf`.
 - **Text length**: 32,767 UTF-16 code units is enforced for xlsx cells only;
@@ -173,8 +193,9 @@ bytes, long paths and streamed xlsx.
 
 - `convert` of a multi-sheet workbook to a single table requires `--sheet`.
 - Exit codes are coarse: usage 1, input/format 2, output/atomic 3, internal 4.
-- `preview` is JSON-only and stops after the requested row range; a range far
-  down the sheet still reads the skipped rows.
+- `preview` reads the whole xlsx worksheet part once even when `--range` stops
+  early, because merges, hidden rows, filters and final row attributes follow
+  `sheetData`; CSV/JSONL still stop after the requested range.
 - `probe`, `schema` and `preview` accept `-` only with an explicit `--from`;
   stdin is spooled to a temporary file rather than streamed.
 - `info` accepts xlsx only; csv/jsonl use `probe`, `schema` or `preview`.

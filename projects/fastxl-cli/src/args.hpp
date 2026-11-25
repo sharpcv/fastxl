@@ -36,6 +36,13 @@ struct Args {
   std::string range;
   size_t preview_rows = 20;
   size_t max_cell_bytes = 256;
+  std::string query;
+  bool regex = false;
+  bool case_sensitive = false;
+  uint32_t context = 1;
+  size_t max_hits = 100;
+  bool regions = false;
+  size_t max_bytes = 0;
   size_t limit = 0;
   bool crlf = false;
   bool bom = false;

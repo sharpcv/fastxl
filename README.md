@@ -15,9 +15,10 @@ models and code generators can inspect spreadsheets without pandas or openpyxl.
   atomic replace.
 - **One value model** — typed `CellView` with a canonical text form across all
   formats.
-- **AI-ready** — `info` / `preview` / `schema` / `probe` return one JSON
-  contract; packaged as an agent skill and MCP server.
-- **No formula engine** — cached values only; legacy `.xls` / CFB is rejected.
+- **AI-ready** — `info` / `preview` / `schema` / `probe` / `search` return one
+  JSON contract; packaged as an agent skill and MCP server.
+- **No formula engine** — reads cached values and preserves `<f>` text on write;
+  legacy `.xls` / CFB is rejected.
 
 ## Quick start
 
@@ -33,6 +34,8 @@ build/bin/fastxl-cli info book.xlsx
 build/bin/fastxl-cli schema book.xlsx --header-row auto --format table
 build/bin/fastxl-cli probe book.xlsx --format jsonl --sheet Data --jobs 4 --max-rows 200000
 build/bin/fastxl-cli preview book.xlsx --rows 20
+build/bin/fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl
+build/bin/fastxl-cli schema book.xlsx --regions --header-row auto --format jsonl
 build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 ```
 
@@ -54,6 +57,7 @@ import fastxl
 
 fastxl.schema("book.xlsx", sheet="Data", header_row="auto")
 fastxl.probe("book.xlsx", sheet="Data", max_rows=200_000, jobs=4)
+fastxl.search("book.xlsx", "invoice", context=2)
 rows = fastxl.preview("book.xlsx", sheet="Data", rows=20, with_cells=True)
 fastxl.write_xlsx("result.xlsx", rows["rows"], sheet_name="Result")
 ```
@@ -99,6 +103,10 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 - [`docs/ai.md`](docs/ai.md) — AI contract, CLI/JSON schema, Python binding API.
 - [`docs/library.md`](docs/library.md) — C++ library guide.
 - [`docs/limitations.md`](docs/limitations.md) — honest list of what is not supported.
+- [`docs/optimization-progress.md`](docs/optimization-progress.md) — optimization
+  log, milestone status and verification record.
+- [`fastxl_optimization_roadmap.md`](fastxl_optimization_roadmap.md) — roadmap and
+  remaining design directions.
 - [`bindings/README.md`](bindings/README.md) — building the Python module on Windows
   and Linux.
 
@@ -127,6 +135,10 @@ On Windows use `xmake f -y -m release -p windows -a x64`. The Python module is
 skipped in debug mode (it must use the release CPython CRT) and needs local
 CPython headers; see [`bindings/README.md`](bindings/README.md) for the
 `FASTXL_PY_*` overrides.
+
+`xmake install -o <prefix> fastxl-core fastxl-cli` installs the static library
+and public headers under `<prefix>/lib` and `<prefix>/include/fastxl`, and the
+CLI under `<prefix>/bin`.
 
 `projects/tests/` and `projects/bench/` are local development directories and
 are not tracked by git. If present locally, `xmake build -y fastxl-tests

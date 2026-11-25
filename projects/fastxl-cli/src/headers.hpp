@@ -36,8 +36,20 @@ HeaderChoice detect_header(const std::vector<RowSummary>& rows,
                            uint32_t pane_top_row = 0);
 
 // Reads the first `max_rows` rows of an xlsx sheet and detects its header.
+// `first_row`/`last_row`/`first_col`/`last_col` restrict the scan (0 = no upper
+// bound) so a data-island region gets its own header.
 HeaderChoice detect_header_xlsx(const fastxl::WorkBook& workbook, size_t sheet,
-                                uint32_t max_rows = 20);
+                                uint32_t max_rows = 20, uint32_t first_row = 1,
+                                uint32_t last_row = 0, uint32_t first_col = 1,
+                                uint32_t last_col = 0);
+
+// Profiles every detected data island of one sheet. Each region gets its own
+// bounds and header (auto-detected when `header_auto`, otherwise the caller's
+// header row when it lies inside the region).
+std::vector<fastxl::SheetProfile> profile_regions(const fastxl::WorkBook& workbook,
+                                                  size_t sheet,
+                                                  const fastxl::ProfileOptions& options,
+                                                  bool header_auto);
 
 // Consumes up to `max_rows` rows from a Reader opened with header_row = 0.
 HeaderChoice detect_header_table(fastxl::Reader& reader, uint32_t max_rows = 20);

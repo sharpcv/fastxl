@@ -26,6 +26,7 @@ public:
   virtual void row_info(uint32_t, const RowInfo&) {}
   virtual void pane(const PaneView&) {}
   virtual void auto_filter(std::string_view) {}
+  virtual void filter_column(const FilterColumnView&) {}
   virtual void hyperlink(const HyperlinkView&) {}
   virtual void data_validation(const DataValidationView&) {}
   virtual bool row(uint32_t) { return true; }
@@ -60,6 +61,9 @@ public:
   void row_info(uint32_t row, const RowInfo& info) override { handler_.on_row_info(row, info); }
   void pane(const PaneView& info) override { handler_.on_pane(info); }
   void auto_filter(std::string_view ref) override { handler_.on_auto_filter(ref); }
+  void filter_column(const FilterColumnView& info) override {
+    handler_.on_filter_column(info);
+  }
   void hyperlink(const HyperlinkView& info) override { handler_.on_hyperlink(info); }
   void data_validation(const DataValidationView& info) override {
     handler_.on_data_validation(info);

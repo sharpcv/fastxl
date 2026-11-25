@@ -28,6 +28,7 @@ std::string help_text() {
       "  probe <file>               per-column profile: types, nulls, stats, samples\n"
       "  schema <file>              column schema for code generation\n"
       "  preview <file>             rows with A1 refs and header candidates\n"
+      "  search <file> --query Q    keyword/regex search with A1 hits and context\n"
       "  convert <input> --out P    stream xlsx/csv/jsonl to another format\n"
       "  errors                     list error codes, exit codes and meanings\n"
       "\n"
@@ -101,7 +102,7 @@ std::string command_help(const std::string& command) {
         "Streams one worksheet and reports, per column: inferred type, nulls, distinct\n"
         "count (capped), top values, numeric statistics, samples, empty/ragged rows and\n"
         "formula/error flags. Memory stays bounded; --jobs N parallelizes xlsx profiling\n"
-        "when the worksheet part fits the in-memory threshold.\n"
+        "for both buffered and streamed (large) worksheet parts.\n"
         "\n"
         "Options:\n"
         "      --sheet <name|index>   worksheet (default: first worksheet)\n"
@@ -114,6 +115,8 @@ std::string command_help(const std::string& command) {
         "      --top N                top values per column, 0..1000 (default 5)\n"
         "      --distinct-cap N       distinct-value cap (default 10000)\n"
         "      --jobs N               0 = auto, 1 = single thread, max 1024\n"
+        "      --regions              profile each detected data island separately\n"
+        "      --max-bytes N          JSONL output budget in bytes (0 = unlimited)\n"
         "      --no-infer             keep CSV/JSONL values as text\n"
         "      --fill-gaps            emit empty cells between populated cells\n"
         "      --format [FMT]         text (default), table or jsonl\n"
@@ -149,6 +152,8 @@ std::string command_help(const std::string& command) {
         "      --top N                top values per column, 0..1000 (default 5)\n"
         "      --distinct-cap N       distinct-value cap (default 10000)\n"
         "      --jobs N               0 = auto, 1 = single thread, max 1024\n"
+        "      --regions              split each sheet into data islands and profile them\n"
+        "      --max-bytes N          JSONL output budget in bytes (0 = unlimited)\n"
         "      --no-infer             keep CSV/JSONL values as text\n"
         "      --fill-gaps            emit empty cells between populated cells\n"
         "      --format [FMT]         text (default), table or jsonl\n"
@@ -194,6 +199,38 @@ std::string command_help(const std::string& command) {
         "\n"
         "Example:\n"
         "  fastxl-cli preview book.xlsx --rows 20 --columns 1,3-5\n";
+
+  if (command == "search")
+    return
+        "fastxl-cli search — keyword and regex search across a workbook\n"
+        "\n"
+        "Usage:\n"
+        "  fastxl-cli search <file> --query TEXT [options]\n"
+        "  fastxl-cli search - --from csv|jsonl|xlsx --query TEXT [options]\n"
+        "\n"
+        "Scans cell text (and formula text when the cached text does not match) and\n"
+        "returns sheet, A1 ref, row/column, type and a small context window. Text\n"
+        "output prints one line per hit; --format jsonl emits the machine contract.\n"
+        "\n"
+        "Options:\n"
+        "      --query TEXT           required search text\n"
+        "      --regex                ECMAScript regular expression\n"
+        "      --case-sensitive       disable ASCII case folding (default: ignore case)\n"
+        "      --context N            rows/columns of context, 0..10 (default 1)\n"
+        "      --max-hits N            stop after N matches, 0 = unlimited (default 100)\n"
+        "      --max-cell-bytes N     truncate matched/context text (default 256)\n"
+        "      --sheet <name|index>   restrict to one worksheet\n"
+        "      --from FMT             input format: xlsx, csv or jsonl (required for `-`)\n"
+        "      --delimiter C          CSV delimiter: `,` `;` or tab\n"
+        "      --no-infer             keep CSV/JSONL values as text\n"
+        "      --format [FMT]         text (default), table or jsonl\n"
+        "      --json                 alias for --format jsonl\n"
+        "  -h, --help                 show this help\n"
+        "\n" +
+        std::string(kExitSummary) +
+        "\n"
+        "Example:\n"
+        "  fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl\n";
 
   if (command == "convert")
     return
