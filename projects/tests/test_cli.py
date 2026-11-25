@@ -233,7 +233,7 @@ def test_mcp(cli):
     result = subprocess.run(
         [sys.executable, str(server), "--cli", str(cli)],
         input="\n".join(json.dumps(message) for message in messages) + "\n",
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     check(result.returncode == 0, "mcp: server exit code")
     replies = {}

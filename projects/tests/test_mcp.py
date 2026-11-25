@@ -56,6 +56,8 @@ def run_server(messages, cli=None, extra_env=None, extra_args=()):
         input="\n".join(json.dumps(message) for message in messages) + "\n",
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         cwd=str(ROOT),
     )

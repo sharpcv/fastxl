@@ -33,6 +33,21 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 PROTOCOL_VERSION = "2024-11-05"
 
 
+def configure_stdio():
+    """JSON-RPC is UTF-8; Windows consoles default to a legacy code page."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):  # pragma: no cover - exotic stream wrappers
+            pass
+
+
+configure_stdio()
+
+
 def find_cli(explicit):
     if explicit:
         return Path(explicit)
