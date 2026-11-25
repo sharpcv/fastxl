@@ -4,8 +4,10 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <limits>
+#include <mutex>
 
 #include "fastxl/error.hpp"
 #include "utf8.hpp"
@@ -162,7 +164,22 @@ void ZipArchive::open_reader(void* reader) const {
   }
 }
 
+namespace {
+
+void warm_timezone_cache() {
+#ifdef _WIN32
+  _tzset();
+#else
+  tzset();
+#endif
+}
+
+} // namespace
+
 ZipArchive ZipArchive::open(const std::filesystem::path& path, bool memory_map) {
+  static std::once_flag timezone_once;
+  std::call_once(timezone_once, warm_timezone_cache);
+
   std::error_code ec;
   if (!std::filesystem::exists(extended_path(path), ec))
     throw_error(ErrorCode::FileNotFound, "cannot open " + to_utf8(path));

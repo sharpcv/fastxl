@@ -1,14 +1,15 @@
 ---
 name: fastxl
-description: Fast, streaming spreadsheet probes and clean XLSX writing for xlsx/csv/jsonl without pandas or openpyxl. Use for workbook metadata, header detection, per-column schema and statistics, typed row samples, table conversion, and producing a new value-only XLSX. Safe on multi-million-row sheets because probes never build a DOM.
+description: Fast, streaming spreadsheet probes and clean XLSX writing for xlsx/csv/jsonl without pandas or openpyxl. Use for workbook metadata, header detection, per-column schema and statistics, typed row samples, table conversion, and producing a new XLSX that keeps formula text for xlsx-to-xlsx copies. Safe on multi-million-row sheets because probes never build a DOM.
 ---
 
 # fastxl
 
 Use this skill for `*.xlsx`, `*.xlsm`, `*.csv`, `*.tsv`, `*.jsonl` files:
 understand a workbook, check data quality, convert between formats, or write a
-new clean workbook. There is **no formula engine**: cached values are read,
-formulas are dropped on write, and legacy `.xls` (CFB) is rejected.
+new clean workbook. There is **no formula engine**: cached values are read, the
+`<f>` formula text is preserved by `WorkBookWriter` and by xlsx-to-xlsx
+`convert`, but formulas are never evaluated. Legacy `.xls` (CFB) is rejected.
 
 The skill is installed for omp at `~/.agents/skills/fastxl`. Paths inside the
 skill are relative to its root; set `SKILL` once when invoking from another
@@ -170,8 +171,9 @@ key missing from the first row is still written; absent values become blanks.
 For sequence rows pass `columns=[...]`. `bool`, `int`, `float`, `str`, `None`,
 `datetime.date` and `datetime.datetime` are typed; non-finite floats are
 rejected. Dict and sequence rows cannot be mixed. Output goes to a temporary
-file and atomically replaces the target; styles, formulas, merges and original
-formatting are not copied.
+file and atomically replaces the target; styles, merges and original formatting
+are not copied. JSON/JSONL rows carry values only, so `write` cannot introduce
+formulas; `convert` xlsx-to-xlsx does keep the source formula text.
 
 `convert` streams instead of materializing and handles every pair of
 xlsx/csv/jsonl. CSV/JSONL input is type-inferred by default (`--no-infer` keeps

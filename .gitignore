@@ -18,6 +18,7 @@ projects/tests/*
 !projects/tests/*.cpp
 !projects/tests/*.hpp
 !projects/tests/*.py
+!projects/tests/*.supp
 !projects/tests/fixtures/
 projects/tests/fixtures/*
 !projects/tests/fixtures/gen_fixtures.py
@@ -32,8 +33,10 @@ projects/bench/*
 projects/bench/data/*
 !projects/bench/data/*.py
 
-# Python extension link intermediates
+# Python extension artifacts and link intermediates
 bindings/python/fastxl/_fastxl.lib
+bindings/python/fastxl/_fastxl*.pyd
+bindings/python/fastxl/_fastxl*.so
 
 # Staged skill artifacts are produced by projects/tools/stage_skill.py
 skill/bin/*

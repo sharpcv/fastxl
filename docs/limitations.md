@@ -39,8 +39,8 @@ bytes, long paths and streamed xlsx.
   `max_memory_bytes` cap of 1 GiB (plus `max_cells`/`max_bytes` when set) and
   materialises every cell, so memory grows with the sheet. Use
   `WorkBook`/`SaxHandler`, `WorkBook::rows()` or `profile_sheet` for large
-  workbooks. [dom-optimization.md](dom-optimization.md) compares the
-  representation with calamine and lists the remaining compact-DOM work.
+  workbooks. A compact DOM representation (and a calamine-style comparison) is
+  tracked as future work rather than a shipped feature.
 - **Streamed parallel profiling**: sheet parts above
   `OpenOptions::in_memory_threshold` (64 MiB) are split into complete `<row>`
   fragments by a decompression producer and parsed by up to `--jobs` workers, so
@@ -199,6 +199,9 @@ bytes, long paths and streamed xlsx.
 - Theme colors are resolved against `xl/theme/theme1.xml` (theme index + tint),
   including the tinted Office palette. Indexed colors (`indexed="N"`) are not
   mapped to the legacy palette: only `rgb` and `theme` become concrete colors.
+- The public headers compile in a `-fno-exceptions` host, but the library itself
+  is built with exceptions: an error raised inside it terminates the process in
+  that configuration, and a full `-fno-exceptions` library build is not shipped.
 - Shared formulas (`t="shared"`) are resolved for masters and followers in the
   same sheet by rewriting relative A1 references. Array formulas
   (`t="array"`) are not expanded; only the master's formula text is kept.

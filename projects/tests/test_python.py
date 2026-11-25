@@ -53,6 +53,7 @@ def find_cli(explicit):
     if explicit:
         return Path(explicit)
     for candidate in (
+        ROOT / "build" / "bin" / "fastxl-cli.exe",
         ROOT / "build" / "bin" / "fastxl-cli",
         ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl-cli",
         ROOT / "build" / "windows" / "x64" / "release" / "fastxl-cli.exe",

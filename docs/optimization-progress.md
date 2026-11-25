@@ -1,15 +1,14 @@
 # fastxl 优化记录与进度
 
-> 日期：2026-11-25  
-> 基线：`v1.0.0`（`main`）  
-> 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试  
-> 本机验证平台：Windows 10 x64（Linux / aarch64 需由 CI 补充验证）
+> 日期：2026-11-25 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.1.0`
+> 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试
+> 本机验证平台：Windows 10 x64（原作者）、Linux x86_64（本轮）；CI 覆盖 Linux x64/arm64 与 Windows x64
 
 ---
 
 ## 1. 目标
 
-按 `fastxl_optimization_roadmap.md` 的三阶段路线推进：
+按三阶段路线推进（原始路线图与 M7 审计稿已在 v1.1.0 发版前归档进 CHANGELOG）：
 
 1. **语义保真**：让 `info` / `preview` / `probe` / `schema` 不再丢失 Excel 的合并、样式、命名区域、表、批注、透视表、图表、隐藏行和公式引用。
 2. **吞吐与检索**：解除单 reader 限制，支持多 Sheet 并发读取、大表流式并行、`search`、单 Sheet 多区域（Data Islands）和 Join Key 提示。
@@ -33,6 +32,7 @@
 | M7 | `Session` 常驻对象、MCP native-first + LRU、`--max-bytes` 预算 | ✅ 完成并验证（Linux x86_64 + Windows） |
 | M8 | 测试fixtures/脚本/bench、全量文档收尾 | ✅ 完成（CI 待首次运行） |
 | M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
+| R1.1 | v1.1.0 发版收口：仓库清理、版本号、契约校验、Sanitizer/no-exceptions 门禁、基准 | ✅ 完成 |
 
 ---
 
@@ -206,7 +206,7 @@
 
 ### M8.1 — M7 审计修复
 
-对应 `fastxl_m7_audit_and_m8_plan.md` 的问题清单。
+对应 v1.1.0 发版前的 M7 审计问题清单（结论已汇总进 CHANGELOG）。
 
 **MCP 契约（P0）**
 
@@ -257,6 +257,48 @@
   `jsonschema` 时自动跳过）。
 - fixture 生成器写入 `VERSION` 标记（生成器源码哈希），测试在生成器变更后自动重建，
   避免本地使用过期 fixture。
+
+### R1.1 — v1.1.0 发版收口
+
+对应 `fastxl_v1_1_0_release_audit.md` 的发版检查单。
+
+**仓库清理**
+
+- 删除根目录过程文件 `fastxl_optimization_roadmap.md`、`fastxl_m7_audit_and_m8_plan.md`，
+  README 链接改为 `CHANGELOG.md`；`docs/optimization-progress.md` 中的引用改为文字说明。
+- 修复 `docs/limitations.md` 指向不存在 `dom-optimization.md` 的死链。
+- `.gitignore` 补上 `bindings/python/fastxl/_fastxl*.pyd` / `.so`，避免本地扩展产物误提交。
+- `xmake.lua` 版本号 `1.1.0`，删除"tests/bench 不随仓库发布"的过时注释；`FASTXL_VERSION`
+  同时传给 `fastxl-python`，CLI / Python 包 / MCP `serverInfo` 版本一致。
+- 新增 `CHANGELOG.md`（v1.0.0 → v1.1.0 全量特性与修复）。
+
+**质量门禁**
+
+- **Windows CI 补全**：`windows` job 现在安装 `pybind11`，用 `FASTXL_PY_*` 指向 runner
+  上的 CPython，编译 `fastxl-python` 并执行 `test_cli.py` / `test_python.py` /
+  `test_mcp.py`——M8.1 的两项 Windows 专属修复（`default_memory_map()`、MCP UTF-8
+  stdio）从此有 CI 覆盖。
+- **契约校验真实执行**：Linux / Windows 都安装 `jsonschema`；`test_cli.py` 对 8 类载荷、
+  `test_mcp.py` 对 5 个工具输出与错误对象做 `docs/probe.schema.json` 校验，不再依赖
+  "本机恰好装了 jsonschema"。
+- **Sanitizer 作业**（`linux-sanitizers`）：ASan + UBSan 跑完整 C++ 套件（含 leak 检测）
+  0 报告；TSan 起初报出 `mktime`/`tzset` 的 libc 内部竞态——`ZipArchive::open` 增加
+  进程内 `tzset()` 预热，其余报告是 glibc 私有锁对 TSan 不可见导致的误报，用带注释的
+  `projects/tests/tsan.supp` 精确抑制，现在 TSan 也是 0 报告。
+- **no-exceptions 门禁**：公开头文件在 `-fno-exceptions` 下可编译（`Result`/`Status`
+  边界降级为 abort-on-error），CI 用
+  `g++ -fno-exceptions -fsyntax-only projects/tests/no_exceptions_check.cpp` 守住。
+  库本体仍以异常构建，文档明确该契约。
+
+**基准与文档**
+
+- 新增 `projects/bench/compare_baselines.py`：同一 fixture 分别用子进程跑 fastxl
+  native、`openpyxl`（可选 `python-calamine`），报告 wall time、rows/s 与峰值 RSS。
+- README 新增 Performance 章节：probe 层延迟（CLI/native/Session）、跨库解析对比
+  （15k×10 与 200k×8）、峰值内存与复现命令。
+- 本机（Linux x86_64）实测：200k×8 上 `probe` 0.57 s / 352k rows/s、
+  `read_rows(0)` 1.27 s / 158k rows/s，openpyxl `read_only` 10.15 s / 20k rows/s
+  （`python-calamine` 在本机不可用，README 已注明）。
 
 ---
 
@@ -402,18 +444,19 @@ pyright: 0 errors
 
 ## 6. 剩余工作
 
-审计提出的 P0/P1 与可落地的 P2 项已落地；以下需要单独排期：
+v1.1.0 的 P0/P1 门禁已全部落地。后续版本候选：
 
-- **CI 首次运行观察**：Linux x64 / arm64 与 Windows 三个 job 的真实结果，arm64 的
-  NEON 路径需要实际跑通后才算验证完成。
-- **sanitizer 与无异常构建**：ASan/UBSan/TSan 并发压测，以及 `-fno-exceptions` 下的
-  `Result<T>` / `try_*` 编译验证。
-- **SIMD 等价性**：同一批输入下 AVX2/SSE2/scalar（x86_64）与 NEON/scalar（aarch64）
-  逐单元格对比。
-- **第三方互操作**：LibreOffice headless 重算、`openpyxl` / `python-calamine` 对照基准
-  与 `bench.py` 的回归阈值。
-- **未覆盖的格式细节**：`indexed` 调色板、数组公式（`t="array"`）展开、Windows 上
-  `Session(memory_map=True)` 的实测行为。
+- **完整 `-fno-exceptions` 库构建**：当前只保证公开头文件可被禁用异常的宿主使用；
+  库内 31 处 `try/catch` 边界仍需按 `__cpp_exceptions` 分块改造，才能在
+  `-fno-exceptions` 下构建整库。
+- **arm64 NEON 实测**：CI 的 linux-arm64 job 已能构建并跑通测试，但还没有 NEON 与
+  scalar 的逐单元格等价性对比与性能数据。
+- **更多基线**：`python-calamine`（本机不可用）、LibreOffice headless 重算、
+  `openpyxl` round-trip 的自动化对照。
+- **未覆盖的格式细节**：`indexed` 调色板、数组公式（`t="array"`）展开、
+  Windows 上 `Session(memory_map=True)` 的实测行为。
+- **Windows Python 模块的长期验证**：CI 已覆盖，但 Windows 上的 `mmap`/文件锁行为
+  建议再加一条“缓存后文件可被替换”的集成测试。
 
 ## 7. 使用与构建
 

@@ -1,0 +1,7 @@
+# glibc keeps its timezone state behind libc-private locks that ThreadSanitizer
+# cannot observe, so the first concurrent mktime()/tzset() sequence is reported
+# as a data race inside libc (__strdup vs free) with fastxl's mktime caller as
+# the outer frame. fastxl already warms tzset() before any concurrent read
+# (ZipArchive::open), so this is the uninstrumented libc lock, not shared state
+# in fastxl.
+race:mz_zip_dosdate_to_time_t

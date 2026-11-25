@@ -836,6 +836,20 @@ for (const auto& column : profile.columns) {
 
 ---
 
+### 8.6 无异常宿主与真实 Excel 细节
+
+- 公开头文件可以在 `-fno-exceptions` 的宿主工程中编译（`Result<T>` / `Status` /
+  `try_*` 适配层不会要求异常支持）；库内部仍使用异常传递错误，因此在禁用异常的宿主中
+  错误会终止进程，这是明确契约。CI 用 `g++ -fno-exceptions -fsyntax-only` 编译
+  `projects/tests/no_exceptions_check.cpp` 守住这条边界。
+- `SheetStyle` 解析 `xl/theme/theme1.xml`：`<color theme="N" tint="..."/>` 会解析为
+  具体 RGB（HSL 亮度调整），不再只支持 `rgb`。
+- 共享公式（`<f t="shared" si=...>`）在 `SheetParser` 中按 `si` 关联主公式，并为每个
+  跟随单元格重写相对引用；`preview`、`search`、`formula_cells`、`formula_links` 都
+  能看到整段公式。使用共享公式的工作表会回退单遍 profiling。
+
+---
+
 ## 9. 值、日期与文本工具
 
 ### 9.1 `to_text`

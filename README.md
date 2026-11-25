@@ -119,10 +119,7 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 - [`docs/limitations.md`](docs/limitations.md) — honest list of what is not supported.
 - [`docs/optimization-progress.md`](docs/optimization-progress.md) — optimization
   log, milestone status and verification record.
-- [`fastxl_optimization_roadmap.md`](fastxl_optimization_roadmap.md) — roadmap and
-  remaining design directions.
-- [`fastxl_m7_audit_and_m8_plan.md`](fastxl_m7_audit_and_m8_plan.md) — the M7 review
-  that drove the M8.1 fixes.
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes, newest first.
 - [`bindings/README.md`](bindings/README.md) — building the Python module on Windows
   and Linux.
 
@@ -156,6 +153,51 @@ CPython headers; see [`bindings/README.md`](bindings/README.md) for the
 and public headers under `<prefix>/lib` and `<prefix>/include/fastxl`, and the
 CLI under `<prefix>/bin`.
 
+## Performance
+
+Numbers below are from **Linux x86_64, release build, Python 3.14, `-O3`**. They
+are a starting point rather than a cross-machine guarantee; every number is
+best-of-N and reproducible with the scripts in `projects/bench/`.
+
+Probe latency on a 15,000 × 10 workbook (N=5 per call). `native` is an
+in-process call; `Session` reuses an already-parsed workbook:
+
+| probe | CLI process | native | Session warm |
+|---|---:|---:|---:|
+| `info` | 3.7 ms | 0.15 ms | — |
+| `preview` (20 rows) | 89 ms | 13.5 ms | — |
+| `preview` (2,000 rows) | 155 ms | 26.6 ms | — |
+| `schema` | 94 ms | 82 ms | 86 ms |
+| `probe` | 90 ms | 83 ms | 84 ms |
+| `search` | 117 ms | 117 ms | 118 ms |
+
+Profiling dominates `schema`/`probe`/`search`, so `Session` mostly removes
+process startup and package parsing — which is why `info` and small previews
+benefit most. `--max-bytes` adds well under 5% (schema 82 → 85 ms native).
+
+Full parse versus other libraries on the same fixtures (separate processes,
+best of 3). `python-calamine` was not installed in this environment, so only
+openpyxl is shown:
+
+| operation | 15k × 10 | 200k × 8 |
+|---|---:|---:|
+| fastxl `probe` (profile only, streaming) | 0.09 s · 175k rows/s | 0.57 s · 352k rows/s |
+| fastxl `read_rows(0)` (materialize rows) | 0.13 s · 119k rows/s | 1.27 s · 158k rows/s |
+| openpyxl `read_only` iteration | 1.36 s · 11k rows/s | 10.15 s · 20k rows/s |
+
+Peak RSS (child process): fastxl profiling 39 MB / 133 MB, materialized rows
+37 MB / 257 MB, openpyxl 33 MB / 50 MB. Materializing every row as Python dicts
+is the expensive mode — prefer `probe`/`schema` (streaming) or
+`read_rows(limit=...)` while exploring large sheets.
+
+```sh
+python projects/bench/bench.py --runs 5                # probe layer: CLI/native/Session
+python projects/bench/compare_baselines.py --runs 3    # fastxl vs openpyxl/calamine
+```
+
+`bindings/README.md` additionally compares native calls with "CLI + `json.loads`"
+on Windows x64.
+
 ## Tests and benchmarks
 
 The test and benchmark sources are tracked; the generated fixtures are not, so
@@ -184,7 +226,13 @@ python projects/bench/bench.py --runs 5 --json build/reports/probe-bench.json
 ```
 
 The streaming throughput suite is `projects/bench/perf_suite.py` and needs
-`xmake build -y fastxl-bench`.
+`xmake build -y fastxl-bench`. Cross-library baselines (fastxl vs `openpyxl`,
+and `python-calamine` when installed) come from
+`projects/bench/compare_baselines.py`; it generates its large fixture on demand:
+
+```sh
+python projects/bench/compare_baselines.py --runs 3
+```
 
 See [`bindings/README.md`](bindings/README.md) for platform-specific Python
 paths and build overrides.

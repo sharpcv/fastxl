@@ -1382,7 +1382,7 @@ PYBIND11_MODULE(_fastxl, m) {
   m.doc() =
       "Native fastxl bindings: info, schema, probe, preview, read_rows, search, "
       "write_xlsx and Session";
-  m.attr("__version__") = "1.0.0";
+  m.attr("__version__") = FASTXL_VERSION;
   m.attr("__build_python__") = py::make_tuple(PY_MAJOR_VERSION, PY_MINOR_VERSION);
   py::exception<fastxl::Exception> error(m, "Error", PyExc_RuntimeError);
   error_type = error.ptr();

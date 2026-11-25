@@ -39,7 +39,7 @@ from ._fastxl import (  # noqa: E402
     write_xlsx as write_xlsx,
 )
 
-__version__: str = "1.0.0"
+__version__: str = "1.1.0"
 __license__: str = "MIT"
 __all__: list[str] = [
     "Error",

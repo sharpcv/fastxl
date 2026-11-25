@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -79,6 +80,22 @@ struct Error {
   std::string message;
 };
 
+namespace detail {
+
+// `Result::value()` / `take()` on an error is a contract violation. With
+// exceptions enabled it throws; in a -fno-exceptions host it aborts instead of
+// silently returning a default value.
+[[noreturn]] inline void report_missing_value(const Error& error) {
+#if defined(__cpp_exceptions)
+  throw Exception(error.code, error.message);
+#else
+  (void)error;
+  std::abort();
+#endif
+}
+
+} // namespace detail
+
 // Non-throwing status for operations without a value.
 class Status {
 public:
@@ -103,15 +120,15 @@ public:
   explicit operator bool() const noexcept { return has_value(); }
 
   T& value() {
-    if (!value_) throw Exception(error_.code, error_.message);
+    if (!value_) detail::report_missing_value(error_);
     return *value_;
   }
   const T& value() const {
-    if (!value_) throw Exception(error_.code, error_.message);
+    if (!value_) detail::report_missing_value(error_);
     return *value_;
   }
   T&& take() {
-    if (!value_) throw Exception(error_.code, error_.message);
+    if (!value_) detail::report_missing_value(error_);
     return std::move(*value_);
   }
   const Error& error() const { return error_; }
@@ -125,6 +142,8 @@ private:
 };
 
 namespace detail {
+
+#if defined(__cpp_exceptions)
 
 template <class Function>
 auto capture_result(Function&& function)
@@ -154,6 +173,26 @@ auto capture_status(Function&& function) -> Status {
     return Status{Error{ErrorCode::Internal, "unknown error"}};
   }
 }
+
+#else // !defined(__cpp_exceptions)
+
+// Hosts compiled with -fno-exceptions can include these headers; error paths
+// abort inside the library instead of unwinding, so the non-throwing adapters
+// can only forward the value.
+template <class Function>
+auto capture_result(Function&& function)
+    -> Result<std::invoke_result_t<Function>> {
+  return Result<std::invoke_result_t<Function>>(
+      std::forward<Function>(function)());
+}
+
+template <class Function>
+auto capture_status(Function&& function) -> Status {
+  std::forward<Function>(function)();
+  return Status{};
+}
+
+#endif // __cpp_exceptions
 
 } // namespace detail
 

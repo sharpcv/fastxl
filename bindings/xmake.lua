@@ -47,6 +47,7 @@ end
 target("fastxl-python")
     set_kind("shared")
     set_default(false)
+    add_defines('FASTXL_VERSION="' .. FASTXL_PROJECT_VERSION .. '"')
     set_languages("c++20")
     add_files("fastxl_module.cpp")
     add_files("../projects/fastxl-cli/src/headers.cpp")

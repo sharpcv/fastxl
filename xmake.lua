@@ -1,5 +1,5 @@
 set_project("fastxl")
-FASTXL_PROJECT_VERSION = "1.0.0"
+FASTXL_PROJECT_VERSION = "1.1.0"
 set_version(FASTXL_PROJECT_VERSION)
 set_license("MIT")
 set_languages("c++20")
@@ -91,7 +91,6 @@ add_requires("fmt 12.2.1")
 add_requires("nlohmann_json 3.12.0")
 
 includes("projects/fastxl-core", "projects/fastxl-cli", "bindings")
--- Local development only; not part of the published tree.
 if os.isdir("projects/bench") then includes("projects/bench") end
 if os.isdir("projects/tests") then includes("projects/tests") end
 

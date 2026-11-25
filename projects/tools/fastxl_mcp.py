@@ -402,7 +402,7 @@ def handle(cli, message):
             "capabilities": {"tools": {}},
             "serverInfo": {
                 "name": "fastxl",
-                "version": "1.0.0",
+                "version": "1.1.0",
                 "mode": "native" if SESSION is not None else "cli",
             },
         }

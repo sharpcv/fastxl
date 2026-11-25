@@ -34,6 +34,7 @@ def find_cli(explicit):
     if explicit:
         return Path(explicit)
     for candidate in (
+        ROOT / "build" / "bin" / "fastxl-cli.exe",
         ROOT / "build" / "bin" / "fastxl-cli",
         ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl-cli",
         ROOT / "build" / "windows" / "x64" / "release" / "fastxl-cli.exe",
@@ -108,6 +109,21 @@ def tool_calls(file_path, max_bytes=None):
     return messages
 
 
+def validate_schema_payloads(payloads, mode):
+    """Validates tool payloads against docs/probe.schema.json (when available)."""
+    try:
+        import jsonschema
+    except ImportError:
+        return
+    schema = json.loads((ROOT / "docs" / "probe.schema.json").read_text(encoding="utf-8"))
+    for label, payload in payloads:
+        try:
+            jsonschema.validate(payload, schema)
+        except jsonschema.ValidationError as error:
+            check(False, "mcp %s: %s payload invalid: %s"
+                  % (mode, label, error.message[:160]))
+
+
 def exercise(replies, mode):
     check(replies[1]["result"]["serverInfo"]["mode"] == mode,
           "mcp %s: initialize reports the mode" % mode)
@@ -131,6 +147,11 @@ def exercise(replies, mode):
           "mcp %s: probe headers" % mode)
     search = payload_of(replies[14])
     check(0 < search["match_count"] <= 5, "mcp %s: search hits" % mode)
+    validate_schema_payloads(
+        [(name, payload_of(replies[index])) for index, name in
+         enumerate(("info", "preview", "schema", "probe", "search"), start=10)],
+        mode,
+    )
 
 
 def budget_replies(replies, mode):
@@ -305,6 +326,9 @@ def main():
 
     check(errors[2]["result"]["isError"] is True, "mcp: unknown tool is an error")
     check(errors[3]["result"]["isError"] is True, "mcp: missing file is an error")
+    validate_schema_payloads(
+        [("error", json.loads(errors[3]["result"]["content"][0]["text"]))], "error"
+    )
 
     if failures:
         for failure in failures:

@@ -38,10 +38,10 @@ jobs:
           key: xmake-${{ matrix.arch }}-${{ hashFiles('xmake.lua', 'projects/*/xmake.lua', 'bindings/xmake.lua') }}
           restore-keys: xmake-${{ matrix.arch }}-
 
-      - name: Install Python headers and pybind11
+      - name: Install Python headers, pybind11 and jsonschema
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-dev pybind11-dev
+          sudo apt-get install -y python3-dev pybind11-dev python3-jsonschema
 
       - name: Configure
         run: xmake f -y -m release
@@ -51,6 +51,11 @@ jobs:
 
       - name: Generate fixtures
         run: python3 projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
+
+      - name: Public headers compile without exceptions
+        run: |
+          g++ -std=c++20 -fno-exceptions -Wall -Wextra -fsyntax-only \
+            -Iprojects/fastxl-core/include projects/tests/no_exceptions_check.cpp
 
       - name: C++ tests
         run: |
@@ -63,6 +68,44 @@ jobs:
           python3 projects/tests/test_cli.py
           python3 projects/tests/test_python.py
           python3 projects/tests/test_mcp.py
+
+  sanitizers:
+    name: linux-sanitizers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.xmake/packages
+          key: xmake-sanitizers-${{ hashFiles('xmake.lua', 'projects/*/xmake.lua') }}
+          restore-keys: xmake-sanitizers-
+
+      - name: Generate fixtures
+        run: python3 projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
+
+      - name: ASan + UBSan tests
+        run: |
+          xmake f -y -m release \
+            --cxflags="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            --ldflags="-fsanitize=address,undefined"
+          xmake build -y fastxl-tests
+          bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
+          test -n "$bin"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 "$bin"
+
+      - name: TSan tests
+        run: |
+          rm -rf build
+          xmake f -y -m release --cxflags="-fsanitize=thread -g" --ldflags="-fsanitize=thread"
+          xmake build -y fastxl-tests
+          bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
+          test -n "$bin"
+          TSAN_OPTIONS=halt_on_error=1:suppressions=projects/tests/tsan.supp "$bin"
 
   windows:
     name: windows-x64
@@ -80,11 +123,24 @@ jobs:
           key: xmake-windows-${{ hashFiles('xmake.lua', 'projects/*/xmake.lua', 'bindings/xmake.lua') }}
           restore-keys: xmake-windows-
 
+      - name: Install Python module dependencies
+        run: python -m pip install pybind11 jsonschema
+
       - name: Configure
-        run: xmake f -y -m release -p windows -a x64
+        shell: pwsh
+        run: |
+          $include = python -c "import sysconfig; print(sysconfig.get_paths()['include'])"
+          $prefix = python -c "import sys; print(sys.base_prefix)"
+          $pybind = python -c "import pybind11; print(pybind11.get_include())"
+          $version = python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"
+          "FASTXL_PY_INCLUDE=$include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PY_LIBDIR=$prefix\libs" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PY_LIBRARY=python$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PYBIND11_INCLUDE=$pybind" | Out-File -FilePath $env:GITHUB_ENV -Append
+          xmake f -y -m release -p windows -a x64
 
       - name: Build
-        run: xmake build -y fastxl-tests fastxl-cli
+        run: xmake build -y fastxl-tests fastxl-cli fastxl-python
 
       - name: Generate fixtures
         run: python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -97,5 +153,8 @@ jobs:
           if (-not $bin) { throw "fastxl-tests.exe not found" }
           & $bin.FullName
 
-      - name: CLI checks
-        run: python projects/tests/test_cli.py
+      - name: CLI, Python and MCP checks
+        run: |
+          python projects/tests/test_cli.py
+          python projects/tests/test_python.py
+          python projects/tests/test_mcp.py
