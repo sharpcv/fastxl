@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build-from-source)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-yellow.svg)](#python-bindings)
+[![CI](https://github.com/sharpcv/fastxl/actions/workflows/ci.yml/badge.svg)](https://github.com/sharpcv/fastxl/actions/workflows/ci.yml)
 
 fastxl streams workbooks instead of materializing them. One `Reader`/`Writer`
 abstraction covers XLSX, CSV and JSONL, with a SAX reader for large sheets and a
@@ -153,9 +154,35 @@ CPython headers; see [`bindings/README.md`](bindings/README.md) for the
 and public headers under `<prefix>/lib` and `<prefix>/include/fastxl`, and the
 CLI under `<prefix>/bin`.
 
-`projects/tests/` and `projects/bench/` are local development directories and
-are not tracked by git. If present locally, `xmake build -y fastxl-tests
-fastxl-bench` and `xmake run fastxl-tests` still work.
+## Tests and benchmarks
+
+The test and benchmark sources are tracked; the generated fixtures are not, so
+a fresh checkout builds them first (the Python suites also regenerate them when
+missing):
+
+```sh
+xmake build -y fastxl-tests fastxl-cli fastxl-python
+python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
+./build/linux/x86_64/release/fastxl-tests   # build/windows/x64/release/fastxl-tests.exe on Windows
+python projects/tests/test_cli.py
+python projects/tests/test_python.py
+python projects/tests/test_mcp.py
+```
+
+`test_cli.py` and `test_mcp.py` only need `fastxl-cli`; `test_python.py` also
+needs the native module built for the same interpreter. CI runs all three on
+Linux x64, Linux arm64 and Windows x64.
+
+Probe-layer timings — CLI vs native, plain vs `--max-bytes`, and the
+`Session` warm cache — come from `projects/bench/bench.py`:
+
+```sh
+python projects/bench/bench.py --runs 5
+python projects/bench/bench.py --runs 5 --json build/reports/probe-bench.json
+```
+
+The streaming throughput suite is `projects/bench/perf_suite.py` and needs
+`xmake build -y fastxl-bench`.
 
 See [`bindings/README.md`](bindings/README.md) for platform-specific Python
 paths and build overrides.

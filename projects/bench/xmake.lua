@@ -1,0 +1,7 @@
+target("fastxl-bench")
+set_kind("binary")
+set_default(false)
+add_files("*.cpp")
+add_deps("fastxl-core")
+add_packages("fmt")
+set_rundir("$(projectdir)")

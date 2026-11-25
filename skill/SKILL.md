@@ -69,10 +69,10 @@ takes `--jsonl -` or `--json -`.
 
 | Command | Scope | Key options |
 |---|---|---|
-| `info` | xlsx only | `--format` |
-| `schema` | all sheets, or one; any format | `--sheet`, `--header-row N\|auto\|0`, `--max-rows`, `--sample`, `--top`, `--distinct-cap`, `--jobs`, `--format`, `--delimiter`, `--fill-gaps`, `--no-infer` |
+| `info` | xlsx only | `--format`, `--max-bytes` |
+| `schema` | all sheets, or one; any format | `--sheet`, `--header-row N\|auto\|0`, `--max-rows`, `--sample`, `--top`, `--distinct-cap`, `--jobs`, `--max-bytes`, `--format`, `--delimiter`, `--fill-gaps`, `--no-infer` |
 | `probe` | one sheet; any format | same as `schema` |
-| `preview` | one sheet; any format | `--rows` (0 = all), `--offset`, `--as-lists`, `--sheet`, `--header-row`, `--format`, `--delimiter`, `--fill-gaps`, `--no-infer` |
+| `preview` | one sheet; any format | `--rows` (0 = all), `--offset`, `--as-lists`, `--max-bytes`, `--sheet`, `--header-row`, `--format`, `--delimiter`, `--fill-gaps`, `--no-infer` |
 | `write` | output xlsx | `--jsonl FILE\|-`, `--json FILE\|-`, `--columns a,b`, `--sheet-name`, `--no-header`, `--compression-level` |
 | `convert` | any pair of xlsx/csv/jsonl | `--out`, `--from`, `--to`, `--sheet`, `--header-row N\|0`, `--delimiter`, `--no-infer`, `--normalize`, `--fill-gaps`, `--columns 1,3-5`, `--limit`, `--crlf`, `--bom`, `--sheet-name`, `--compression-level` |
 
@@ -80,6 +80,24 @@ takes `--jsonl -` or `--json -`.
 `index` fields are 0-based. `--header-row` takes a 1-based row, `0` for no
 header, or `auto`; `auto` uses frozen panes and a text-to-typed transition and
 reports the chosen row in `header_row`. `convert` rejects `auto`.
+
+## Output budget
+
+`info`, `schema`, `probe` and `preview` accept `--max-bytes N` (Python:
+`max_bytes=N`). The payload is folded in stages — samples, top values, empty
+columns, validation enums, metadata, constant-column statistics, then trailing
+rows and columns — and a `budget` object reports what happened:
+
+```json
+"budget": {"max_bytes": 4000, "bytes": 3973, "applied": true,
+           "within_budget": true, "stages": {"samples": 39, "empty_columns": 22}}
+```
+
+`within_budget` is false only when even the last stage cannot meet the cap; the
+payload is never cut mid-JSON. Use it to keep probe output inside a context
+window; when `applied` is true and the answer is missing a column or row, prefer
+re-requesting a narrower slice (`--sheet`, `--rows`, `--columns` on the CLI)
+over raising the cap blindly.
 
 ## Python API
 
@@ -104,8 +122,16 @@ rows = fastxl.preview("book.xlsx", sheet="Data", rows=20)
 | `write_xlsx(file, rows, ...)` | Atomic xlsx writer for dicts or sequences |
 
 `schema`/`probe` also take `format=`, `delimiter=`, `infer=`, `fill_gaps=`,
-`max_rows=`, `sample=`, `top=`, `distinct_cap=`, `jobs=`. `preview`/`read_rows`
-also take `offset=`, `as_dicts=`, `max_columns=`.
+`max_rows=`, `sample=`, `top=`, `distinct_cap=`, `jobs=`, `max_bytes=`.
+`preview`/`read_rows` also take `offset=`, `as_dicts=`, `max_columns=`,
+`max_bytes=`. For repeated calls against one file, `fastxl.Session()` caches the
+opened workbook (LRU 8, invalidated on `(mtime, size)`) and serves
+`info`/`schema`/`probe`/`search` from it:
+
+```python
+with fastxl.Session() as session:
+    session.schema("book.xlsx", max_bytes=4000)
+```
 
 Values are typed: `int`/`float`/`bool`/`None`/`str`. Dates, times and errors are
 canonical ISO/`#DIV/0!` strings. Duplicate headers become `a`, `a_2`, ...;

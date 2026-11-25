@@ -189,6 +189,20 @@ bytes, long paths and streamed xlsx.
 - **Text length**: 32,767 UTF-16 code units is enforced for xlsx cells only;
   CSV/JSONL do not enforce the Excel limit.
 
+## Python and MCP
+
+- `fastxl.Session` caches the parsed workbook (OPC parts, shared strings,
+  styles), not row data: `preview`/`read_rows` still stream the sheet on every
+  call, and `schema`/`probe` still scan every row. Expect the Session to help
+  most with repeated `info`/`search` calls, least with full profiling.
+- Session entries are invalidated by `(mtime, size)`; a rewrite that preserves
+  both (rare, e.g. same-size in-place edit within the timestamp granularity) is
+  not detected. Use `session.clear()` when in doubt.
+- Native and CLI payloads are the same contract for `info`/`schema`/`probe`/
+  `search`; `preview` deliberately has two shapes (row reader vs sheet preview).
+- The MCP server keeps one Session per process, so a long-running server will
+  hold up to 8 workbooks open (descriptors and memory).
+
 ## CLI
 
 - `convert` of a multi-sheet workbook to a single table requires `--sheet`.
@@ -199,7 +213,15 @@ bytes, long paths and streamed xlsx.
 - `probe`, `schema` and `preview` accept `-` only with an explicit `--from`;
   stdin is spooled to a temporary file rather than streamed.
 - `info` accepts xlsx only; csv/jsonl use `probe`, `schema` or `preview`.
-- The MCP server (`projects/tools/fastxl_mcp.py`) is a thin Python wrapper; it is
-  read-only and requires the CLI binary. The CLI JSON contract and
-  machine-readable schema are in `docs/ai.md` and `docs/probe.schema.json`.
+- `--max-bytes` applies to `--format jsonl` only, and folding is lossy by
+  design: `budget.stages` / `budget.folded_columns` say what was dropped, and
+  `within_budget: false` means even the last stage could not meet the cap. Never
+  parse a budgeted payload as if it were complete.
+- The MCP server (`projects/tools/fastxl_mcp.py`) is read-only. It prefers the
+  native module through one cached `fastxl.Session` and falls back to
+  `fastxl-cli` when the module is unavailable or `FASTXL_FORCE_CLI=1` /
+  `--cli-only` is set; `fastxl_preview` always uses the CLI because its payload
+  is the sheet-preview contract, not the row-reader contract. The CLI JSON
+  contract and machine-readable schema are in `docs/ai.md` and
+  `docs/probe.schema.json`.
 - No progress reporting or cancellation for long conversions.

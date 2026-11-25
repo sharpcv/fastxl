@@ -33,7 +33,7 @@ class FastxlCliError(RuntimeError):
 
 
 class _NativeApi(Protocol):
-    def info(self, file: str, format: str = "") -> JsonPayload: ...
+    def info(self, file: str, format: str = "", max_bytes: int = 0) -> JsonPayload: ...
     def schema(
         self,
         file: str,
@@ -48,6 +48,7 @@ class _NativeApi(Protocol):
         top: int = 5,
         distinct_cap: int = 10000,
         jobs: int = 0,
+        max_bytes: int = 0,
     ) -> JsonPayload: ...
     def probe(
         self,
@@ -63,6 +64,7 @@ class _NativeApi(Protocol):
         top: int = 5,
         distinct_cap: int = 10000,
         jobs: int = 0,
+        max_bytes: int = 0,
     ) -> JsonPayload: ...
     def preview(
         self,
@@ -78,6 +80,7 @@ class _NativeApi(Protocol):
         fill_gaps: bool = False,
         max_columns: int = 16384,
         with_cells: bool = False,
+        max_bytes: int = 0,
     ) -> JsonPayload: ...
     def write_xlsx(
         self,
@@ -93,6 +96,7 @@ class _NativeApi(Protocol):
 class _InfoArgs(Protocol):
     file: str
     format: str
+    max_bytes: int
 
 
 class _SelectorArgs(Protocol):
@@ -102,6 +106,7 @@ class _SelectorArgs(Protocol):
     format: str
     delimiter: str
     fill_gaps: bool
+    max_bytes: int
 
 
 class _SchemaArgs(_SelectorArgs, Protocol):
@@ -302,7 +307,7 @@ def cli_preview_to_records(
                 values[name] = typed_value(cell.get("text", ""), cell.get("type", "text"))
         rows.append(values if as_dicts else [values[name] for name in names])
     remaining = len(data_rows) - offset
-    return {
+    result: JsonPayload = {
         "version": 1,
         "ok": True,
         "file": payload.get("file"),
@@ -314,6 +319,9 @@ def cli_preview_to_records(
         "truncated": bool(payload.get("truncated")) or (limit != 0 and remaining > limit),
         "rows_read": len(rows),
     }
+    if payload.get("budget") is not None:
+        result["budget"] = payload["budget"]
+    return result
 
 
 def common_selector(args: _SelectorArgs) -> list[str]:
@@ -327,14 +335,19 @@ def common_selector(args: _SelectorArgs) -> list[str]:
         result += ["--delimiter", args.delimiter]
     if args.fill_gaps:
         result += ["--fill-gaps"]
+    if getattr(args, "max_bytes", 0):
+        result += ["--max-bytes", str(args.max_bytes)]
     return result
 
 
 def cmd_info(args: _InfoArgs) -> JsonPayload:
     if NATIVE and not force_cli():
         assert native is not None
-        return native.info(args.file, format=args.format or "")
-    return run_cli(["info", args.file, "--json"])
+        return native.info(args.file, format=args.format or "", max_bytes=args.max_bytes)
+    cli = ["info", args.file, "--json"]
+    if args.max_bytes:
+        cli += ["--max-bytes", str(args.max_bytes)]
+    return run_cli(cli)
 
 
 def cmd_schema(args: _SchemaArgs) -> JsonPayload:
@@ -353,6 +366,7 @@ def cmd_schema(args: _SchemaArgs) -> JsonPayload:
             top=args.top,
             distinct_cap=args.distinct_cap,
             jobs=args.jobs,
+            max_bytes=args.max_bytes,
         )
     cli = ["schema", args.file, *common_selector(args), "--json"]
     cli += ["--max-rows", str(args.max_rows), "--sample", str(args.sample),
@@ -379,6 +393,7 @@ def cmd_probe(args: _SchemaArgs) -> JsonPayload:
             top=args.top,
             distinct_cap=args.distinct_cap,
             jobs=args.jobs,
+            max_bytes=args.max_bytes,
         )
     cli = ["probe", args.file, *common_selector(args), "--json"]
     cli += ["--max-rows", str(args.max_rows), "--sample", str(args.sample),
@@ -403,6 +418,7 @@ def cmd_preview(args: _PreviewArgs) -> JsonPayload:
             infer=not args.no_infer,
             delimiter=args.delimiter or "",
             fill_gaps=args.fill_gaps,
+            max_bytes=args.max_bytes,
         )
         # The table reader derives columns from the header row; values further
         # right are dropped. The CLI widens columns from the scanned rows, so
@@ -519,6 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
     info = sub.add_parser("info", help="workbook metadata")
     info.add_argument("file")
     info.add_argument("--format", default="")
+    info.add_argument("--max-bytes", type=int, default=0)
     info.set_defaults(func=cmd_info)
 
     for name, func in (("schema", cmd_schema), ("probe", cmd_probe)):
@@ -535,6 +552,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--top", type=int, default=5)
         p.add_argument("--distinct-cap", type=int, default=10000)
         p.add_argument("--jobs", type=int, default=0)
+        p.add_argument("--max-bytes", type=int, default=0)
         p.set_defaults(func=func)
 
     preview = sub.add_parser("preview", aliases=["records"], help="typed sample rows")
@@ -545,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--delimiter", default="")
     preview.add_argument("--fill-gaps", action="store_true")
     preview.add_argument("--no-infer", action="store_true")
+    preview.add_argument("--max-bytes", type=int, default=0)
     preview.add_argument("--rows", type=int, default=20)
     preview.add_argument("--offset", type=int, default=0)
     preview.add_argument("--as-lists", action="store_true")

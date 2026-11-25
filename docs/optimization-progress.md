@@ -31,7 +31,7 @@
 | M5 | `Result<T>` / `std::error_code`、`WorkSheet::rows()`、DOM 内存上限 | ✅ 完成并验证 |
 | M6 | Writer 公式透传、自定义样式、并行写、安装规则 | ✅ 完成并验证 |
 | M7 | `Session` 常驻对象、MCP native-first + LRU、`--max-bytes` 预算 | ✅ 完成并验证（Linux x86_64 + Windows） |
-| M8 | 测试fixtures/脚本/bench、全量文档收尾 | ⏳ 未开始 |
+| M8 | 测试fixtures/脚本/bench、全量文档收尾 | ✅ 完成（CI 待首次运行） |
 
 ---
 
@@ -159,6 +159,50 @@
 - 新增 `projects/tests/test_python.py`（模块函数、预算、Session 缓存/失效/淘汰、与 CLI 合约对齐）与 `projects/tests/test_mcp.py`（native/CLI 两种模式、预算、错误路径）。
 - `test_cli.py` 增加五个命令的 `--max-bytes` 断言，并修正 tool list（补上 `fastxl_search`）。
 
+### M8 — 测试、基准与 CI
+
+**fixtures（标准库生成，CI 可复现）**
+
+`projects/tests/fixtures/gen_fixtures.py` 新增六个 fixture：
+
+| fixture | 覆盖点 |
+|---|---|
+| `metadata.xlsx` | 样式（字体色 / 填充 / strike / 数字格式）、definedNames（工作簿级 + sheet 级）、合并单元格、隐藏行与隐藏列、autoFilter、数据验证列表、table、comments、pivot（含 cache 源）、chart（含引用） |
+| `multi.xlsx` | 4 个 sheet（visible / hidden / veryHidden），跨表 `order_id` 触发 `join_keys` |
+| `large.xlsx` | 15000 行 × 10 列，用于流式 profiling、行读取与 bench |
+| `search.xlsx` | 文本命中、公式命中（缓存文本不匹配）、Unicode 文本、数字文本命中 |
+| `regions.xlsx` | 两个由空行分隔的数据岛屿，`--header-row auto` 时各自识别表头 |
+| `budget.xlsx` | 40 列宽表（22 个全空列、1 个常量列），用于预算折叠 |
+
+生成器保持纯标准库，不引入 openpyxl，CI 与本地用同一份代码。
+
+**测试**
+
+- `test_cli.py`：新增 `test_feature_fixtures`，覆盖上述六个 fixture（元数据保真、sheet 可见性、join_keys、search 命中与公式命中、region 切分、预算折叠、`--max-rows` 流式上界）。
+- `test_python.py`：新增 native 侧的同组断言，并验证 `Session` 复用。
+- `test_mcp.py`：同一组 fixture 在 native 与 `FASTXL_FORCE_CLI=1` 两种模式下各跑一遍。
+- 三个脚本在 fixture 缺失时自动调用生成器，因此干净 checkout 与 CI 无需额外步骤。
+
+**bench**
+
+`projects/bench/bench.py` 测 probe 层（与 `perf_suite.py` 的裸吞吐互补）：每个用例给出 median / min / max 毫秒与子进程峰值 RSS，覆盖 CLI、CLI + `--max-bytes`、native、`Session` 热缓存四种路径，`--json` 可落盘供对比。
+
+**CI**
+
+`.github/workflows/ci.yml`：
+
+- Linux x64（`ubuntu-24.04`）与 Linux arm64（`ubuntu-24.04-arm`）：安装 `python3-dev` / `pybind11-dev`，构建 `fastxl-tests fastxl-cli fastxl-python`，运行 C++、CLI、Python、MCP 四组检查。
+- Windows x64：构建 `fastxl-tests` / `fastxl-cli`，运行 C++ 与 CLI 检查（Python 模块依赖本机 CPython 头文件路径，保留给本地验证）。
+- xmake 包缓存按平台缓存，`fail-fast: false` 让 x64 与 arm64 互不遮挡。
+
+**入库策略**
+
+`.gitignore` 从"整个 `projects/tests/`、`projects/bench/` 忽略"改为"测试与基准源码入库，生成的 fixtures 与 bench 数据仍然忽略"。这样 CI 和后续贡献者跑的是同一套测试，而不是各自本地的私有副本。
+
+**skill**
+
+`skill/scripts/fastxl_skill.py` 的 `info` / `schema` / `probe` / `preview` 增加 `--max-bytes`（native 与 CLI 两条路径都透传），`SKILL.md` 同步示例。
+
 ---
 
 ## 4. 验证记录
@@ -208,9 +252,45 @@ MCP checks passed
 - `test_python.py` 中 native 与 CLI 的 `info` / `probe` / `search` 输出逐字段一致。
 - `build/python/fastxl/_fastxl.so` 为 CPython 3.14 构建，与 `.venv` 解释器匹配。
 
+### M8 验证（Linux x86_64）
+
+```sh
+python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
+xmake build -y fastxl-tests fastxl-cli fastxl-python
+./build/linux/x86_64/release/fastxl-tests
+python projects/tests/test_cli.py
+python projects/tests/test_python.py
+python projects/tests/test_mcp.py
+python projects/bench/bench.py --runs 5
+```
+
+结果：
+
+```text
+122 tests, 0 failures
+CLI checks passed
+Python checks passed
+MCP checks passed
+```
+
+probe 层基准（`large.xlsx`，15000 行 × 10 列，5 次中位数，本机 Linux x86_64）：
+
+| operation | CLI | CLI + budget | native | Session 热 |
+|---|---:|---:|---:|---:|
+| `info` | 3.4 ms | – | 0.15 ms | – |
+| `preview rows=20` | 88 ms | – | 11 ms | – |
+| `preview rows=2000` | 153 ms | 169 ms | 30 ms | – |
+| `schema` | 86 ms | 91 ms | 80 ms | 78 ms |
+| `probe` | 88 ms | 95 ms | 80 ms | 82 ms |
+| `search` | 117 ms | – | 114 ms | 114 ms |
+
+- 进程启动是 CLI 的固定成本：`info` 3.4 ms 对 native 0.15 ms；`preview rows=20` 88 ms 对 11 ms。
+- `schema` / `probe` 由扫描本身主导，native 与 CLI 差距缩小，`Session` 只省掉包解析（约 2%），这与 M7 的设计预期一致。
+- `--max-bytes` 的折叠成本很小：`schema` 86 → 91 ms（CLI）、80 → 80 ms（native）。
+
 ### 验证边界
 
-- Windows x64（原作者）与 Linux x86_64（本次）均已本地验证；aarch64、NEON 与 mmap 的跨平台行为仍需要 CI。
+- Windows x64（原作者 + CI）与 Linux x86_64（本次）已本地验证；Linux arm64 由新增 CI job 覆盖（首次运行结果待观察）。
 - 尚无正式 wall-clock benchmark 数据；不要在报告中引用未记录的加速比。
 
 ---
@@ -229,19 +309,21 @@ MCP checks passed
 | CLI | `projects/fastxl-cli/src/cmd_*.cpp` |
 | Python / MCP | `bindings/fastxl_module.cpp`、`bindings/python/fastxl/`、`projects/tools/fastxl_mcp.py` |
 | 输出预算 | `projects/fastxl-cli/src/json_budget.hpp` |
-| 测试 | `projects/tests/test_cli.py`、`test_python.py`、`test_mcp.py` |
+| 测试 | `projects/tests/test_cli.py`、`test_python.py`、`test_mcp.py`、`fixtures/gen_fixtures.py` |
+| 基准 | `projects/bench/bench.py`、`perf_suite.py`、`python_overhead.py` |
+| CI | `.github/workflows/ci.yml` |
 | 契约 | `docs/probe.schema.json`、`docs/ai.md`、`docs/library.md` |
 
 ---
 
 ## 6. 剩余工作
 
-### M8 — 验证与文档收尾
+M0–M8 均已落地，后续可选方向：
 
-- 生成 fixtures：`metadata.xlsx`、`multi.xlsx`、`large.xlsx`、`search.xlsx`、`regions.xlsx`、`budget.xlsx`。
-- 增加 `bench.py`，补上 wall-clock 与内存基线，避免引用未测量的加速比。
-- 补齐 Linux / aarch64 CI 验证，并复核 skill 文档中的示例。
-- 复核两个已知的边界：`fastxl_preview` 仍走 CLI（native 行读取契约不同）；`Session` 只缓存 workbook 级解析，行流式读取不缓存。
+- 观察 `ci.yml` 在 Linux arm64 与 Windows 上的首次运行结果，必要时调整 runner 或跳过项。
+- 把 `bench.py` 的 median 作为 CI 基线并设置回归阈值（目前只在本地记录）。
+- Windows 上的 Python 模块 CI（需要固定 CPython 版本与 `FASTXL_PY_*` 路径）。
+- 较长尾的 roadmap 条目（Session 常驻化之外的多轮会话、更多 Excel 元数据）见 `fastxl_optimization_roadmap.md`。
 
 ## 7. 使用与构建
 
