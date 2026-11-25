@@ -80,6 +80,26 @@ class JoinKey(TypedDict):
     reason: Literal["same_name", "value_overlap"]
     overlap: NotRequired[float]
 
+class BudgetColumn(TypedDict):
+    reason: Literal["empty", "constant", "budget"]
+    index: NotRequired[int]
+    name: NotRequired[str]
+    letter: NotRequired[str]
+
+class Budget(TypedDict):
+    """Report emitted when ``max_bytes`` is set; describes what was folded."""
+
+    max_bytes: int
+    applied: bool
+    bytes: int
+    within_budget: bool
+    stages: NotRequired[dict[str, int]]
+    stages_count: NotRequired[int]
+    folded_columns: NotRequired[list[BudgetColumn]]
+    folded_columns_count: NotRequired[int]
+    dropped_rows: NotRequired[int]
+    dropped_matches: NotRequired[int]
+
 class InfoSheet(TypedDict):
     index: int
     name: str
@@ -105,6 +125,7 @@ class InfoResult(TypedDict):
     sheets: list[InfoSheet]
     defined_names: NotRequired[list[DefinedName]]
     defined_names_truncated: NotRequired[bool]
+    budget: NotRequired[Budget]
 
 class NumericStats(TypedDict):
     any: bool
@@ -190,6 +211,7 @@ class SchemaResult(TypedDict):
     defined_names: NotRequired[list[DefinedName]]
     defined_names_truncated: NotRequired[bool]
     join_keys: NotRequired[list[JoinKey]]
+    budget: NotRequired[Budget]
 
 class ProbeResult(TypedDict):
     version: int
@@ -228,6 +250,7 @@ class ProbeResult(TypedDict):
     charts: NotRequired[list[ChartInfo]]
     range: NotRequired[str]
     regions: NotRequired[list[SheetSection]]
+    budget: NotRequired[Budget]
 
 class PreviewCell(TypedDict):
     col: int
@@ -274,6 +297,7 @@ class PreviewResult(TypedDict):
     truncated: bool
     rows_read: int
     extra_cells: int
+    budget: NotRequired[Budget]
 
 class SearchContextCell(TypedDict):
     ref: str
@@ -301,8 +325,9 @@ class SearchResult(TypedDict):
     match_count: int
     truncated: bool
     searched_cells: int
+    budget: NotRequired[Budget]
 
-def info(file: str, format: str = "") -> InfoResult: ...
+def info(file: str, format: str = "", max_bytes: int = 0) -> InfoResult: ...
 def schema(
     file: str,
     sheet: SheetSelector = None,
@@ -317,6 +342,7 @@ def schema(
     distinct_cap: int = 10000,
     jobs: int = 0,
     regions: bool = False,
+    max_bytes: int = 0,
 ) -> SchemaResult: ...
 def probe(
     file: str,
@@ -332,6 +358,7 @@ def probe(
     distinct_cap: int = 10000,
     jobs: int = 0,
     regions: bool = False,
+    max_bytes: int = 0,
 ) -> ProbeResult: ...
 def read_rows(
     file: str,
@@ -346,6 +373,7 @@ def read_rows(
     fill_gaps: bool = False,
     max_columns: int = 16384,
     with_cells: bool = False,
+    max_bytes: int = 0,
 ) -> PreviewResult: ...
 def search(
     file: str,
@@ -357,6 +385,7 @@ def search(
     max_cell_bytes: int = 256,
     sheet: SheetSelector = None,
     format: str = "",
+    max_bytes: int = 0,
 ) -> SearchResult: ...
 def preview(
     file: str,
@@ -371,7 +400,106 @@ def preview(
     fill_gaps: bool = False,
     max_columns: int = 16384,
     with_cells: bool = False,
+    max_bytes: int = 0,
 ) -> PreviewResult: ...
+class Session:
+    """Caches opened workbooks so repeated probes skip the package parse.
+
+    Entries are keyed by path and invalidated when the file's mtime or size
+    changes; the least recently used entry is evicted past ``capacity``.
+    """
+
+    def __init__(self, capacity: int = 8) -> None: ...
+    def info(
+        self, file: str, format: str = "", max_bytes: int = 0
+    ) -> InfoResult: ...
+    def schema(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        infer: bool = True,
+        delimiter: str = "",
+        fill_gaps: bool = False,
+        max_rows: int = 0,
+        sample: int = 5,
+        top: int = 5,
+        distinct_cap: int = 10000,
+        jobs: int = 0,
+        regions: bool = False,
+        max_bytes: int = 0,
+    ) -> SchemaResult: ...
+    def probe(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        infer: bool = True,
+        delimiter: str = "",
+        fill_gaps: bool = False,
+        max_rows: int = 0,
+        sample: int = 5,
+        top: int = 5,
+        distinct_cap: int = 10000,
+        jobs: int = 0,
+        regions: bool = False,
+        max_bytes: int = 0,
+    ) -> ProbeResult: ...
+    def search(
+        self,
+        file: str,
+        query: str,
+        regex: bool = False,
+        ignore_case: bool = True,
+        context: int = 1,
+        max_hits: int = 100,
+        max_cell_bytes: int = 256,
+        sheet: SheetSelector = None,
+        format: str = "",
+        max_bytes: int = 0,
+    ) -> SearchResult: ...
+    def read_rows(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        limit: int = 20,
+        offset: int = 0,
+        as_dicts: bool = True,
+        infer: bool = True,
+        delimiter: str = "",
+        fill_gaps: bool = False,
+        max_columns: int = 16384,
+        with_cells: bool = False,
+        max_bytes: int = 0,
+    ) -> PreviewResult: ...
+    def preview(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        rows: int = 20,
+        offset: int = 0,
+        as_dicts: bool = True,
+        infer: bool = True,
+        delimiter: str = "",
+        fill_gaps: bool = False,
+        max_columns: int = 16384,
+        with_cells: bool = False,
+        max_bytes: int = 0,
+    ) -> PreviewResult: ...
+    def clear(self) -> None: ...
+    def stats(self) -> dict[str, int]: ...
+    @property
+    def capacity(self) -> int: ...
+    def __len__(self) -> int: ...
+    def __enter__(self) -> "Session": ...
+    def __exit__(self, *args: object) -> None: ...
+
 def write_xlsx(
     file: str,
     rows: Sequence[Mapping[str, CellValue]] | Sequence[Sequence[CellValue]],

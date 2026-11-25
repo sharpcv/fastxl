@@ -9,6 +9,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "json_budget.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -94,6 +95,7 @@ int run_search(const Args& args) {
     root["match_count"] = result.hits.size();
     root["truncated"] = result.truncated;
     root["searched_cells"] = result.searched_cells;
+    apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());
     return 0;
   }

@@ -28,11 +28,13 @@ if _build_python is not None and tuple(_build_python) != sys.version_info[:2]:
 
 from ._fastxl import (  # noqa: E402
     Error as Error,
+    Session as Session,
     info as info,
     preview as preview,
     probe as probe,
     read_rows as read_rows,
     schema as schema,
+    search as search,
     write_xlsx as write_xlsx,
 )
 
@@ -40,10 +42,12 @@ __version__: str = "1.0.0"
 __license__: str = "MIT"
 __all__: list[str] = [
     "Error",
+    "Session",
     "info",
     "preview",
     "probe",
     "read_rows",
     "schema",
+    "search",
     "write_xlsx",
 ]

@@ -16,6 +16,7 @@
 #include "fastxl/fastxl.hpp"
 #include "fastxl/text.hpp"
 #include "headers.hpp"
+#include "json_budget.hpp"
 #include "metadata_json.hpp"
 #include "table.hpp"
 
@@ -449,7 +450,9 @@ Json preview_root(const std::string& input, Format format, const std::string& sh
 
 void print_preview_output(const Args& args, const Json& root) {
   if (args.format == OutputFormat::Jsonl) {
-    fmt::print("{}\n", root.dump());
+    Json out = root;
+    apply_output_budget(out, args.max_bytes);
+    fmt::print("{}\n", out.dump());
     return;
   }
 

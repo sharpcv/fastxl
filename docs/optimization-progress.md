@@ -30,7 +30,7 @@
 | M4 | mmap、AVX2/NEON 分派、preview/search 快路径 | ✅ 完成；Windows x64 验证，ARM/Linux 待 CI |
 | M5 | `Result<T>` / `std::error_code`、`WorkSheet::rows()`、DOM 内存上限 | ✅ 完成并验证 |
 | M6 | Writer 公式透传、自定义样式、并行写、安装规则 | ✅ 完成并验证 |
-| M7 | `Session` 常驻对象、MCP native-first + LRU、`--max-bytes` 预算 | ⏳ 未开始 |
+| M7 | `Session` 常驻对象、MCP native-first + LRU、`--max-bytes` 预算 | ✅ 完成并验证（Linux x86_64 + Windows） |
 | M8 | 测试fixtures/脚本/bench、全量文档收尾 | ⏳ 未开始 |
 
 ---
@@ -116,6 +116,49 @@
    - 顺序 writer：STORE、inline string、公式、合并。
    - 并行 writer + STORE：预压缩条目的 `close_raw` 路径。
 
+### M7 — 常驻会话与输出预算
+
+**C++ 输出预算（`projects/fastxl-cli/src/json_budget.hpp`）**
+
+- `--max-bytes N` 从"已解析但未生效"变为真实生效：`info` / `preview` / `schema` / `probe` / `search` 的 JSONL 输出统一经过 `apply_output_budget()`。
+- 按信息损失从小到大分阶段折叠，每阶段只在仍然超预算时执行：
+  1. `samples` 每列样本值
+  2. `top_values` 每列值频次
+  3. `empty_columns` 全空列（整列移除并记入 `folded_columns`）
+  4. `enum_values` 验证枚举
+  5. `metadata` 合并单元格、隐藏行、公式链接、tables/comments/pivot/charts/definedNames
+  6. `constant_columns` 单值列的数值/文本统计
+  7. `rows` / `matches` 尾部预览行与检索命中（置 `truncated: true`）
+  8. `columns` 超宽表的尾部列
+- 输出始终是合法 JSON，末尾追加 `budget` 对象：`max_bytes`、`bytes`、`applied`、`within_budget`、`stages`、`folded_columns`、`dropped_rows`、`dropped_matches`。
+- 报告本身也计入预算：折叠明细反而撑爆预算时先丢 `folded_columns` 明细、再丢 `stages` 明细（保留计数）；仍不达标就如实返回 `within_budget: false`，不截断 JSON。
+- 人类可读的 text/table 布局不受影响（已有行列上限）。
+
+**Python 常驻会话（`fastxl.Session`）**
+
+- 新增 `fastxl.Session(capacity=8)`：按路径缓存已打开的 `WorkBook`，LRU 淘汰，`stats()` 暴露 `size` / `capacity` / `hits` / `misses`。
+- 失效条件是文件的 `(mtime, size)` 变化；`clear()` 手动清空；支持 `with fastxl.Session() as s:`。
+- `info` / `schema` / `probe` / `search` 复用缓存 workbook（共享字符串、样式表只解析一次）；`preview` / `read_rows` 仍走流式读取，因为 reader 独占解压流。
+- 模块级函数与 Session 方法都新增 `max_bytes=0`，返回同样的 `budget` 对象；Python 侧预算与 CLI 共用同一份 C++ 实现，避免两套裁剪逻辑漂移。
+
+**MCP native-first（`projects/tools/fastxl_mcp.py`）**
+
+- 默认优先导入编译模块（`build/python` 或已安装包），进程内常驻一个 `Session`；模块不可用时，或设置了 `FASTXL_FORCE_CLI=1` / `--cli-only`，回落到 `fastxl-cli` 子进程。
+- `initialize` 的 `serverInfo.mode` 报告 `native` / `cli`，便于排查。
+- `fastxl_info` / `fastxl_schema` / `fastxl_probe` / `fastxl_search` 走 native；`fastxl_preview` 保留 CLI 契约（used range、header row、合并单元格等），因为行读取接口的载荷形状不同。
+- 所有工具的 `inputSchema` 新增 `max_bytes` 并原样透传；原生调用失败时打印 stderr 并回落到 CLI，错误渲染保持一致。
+
+**契约与文档**
+
+- `docs/probe.schema.json` 新增 `Budget` / `BudgetColumn`，并补上此前缺失的 `Search` / `SearchMatch`。
+- `docs/ai.md`、`docs/library.md`、`README.md` 与 CLI `--help` 同步新增说明。
+
+**回归与修复**
+
+- 过时测试 `workbook_one_reader_at_a_time` 改为 `workbook_concurrent_readers`：并发 reader 是 M2 的特性，改为跨线程读两张表并与顺序读取结果比对。
+- 新增 `projects/tests/test_python.py`（模块函数、预算、Session 缓存/失效/淘汰、与 CLI 合约对齐）与 `projects/tests/test_mcp.py`（native/CLI 两种模式、预算、错误路径）。
+- `test_cli.py` 增加五个命令的 `--max-bytes` 断言，并修正 tool list（补上 `fastxl_search`）。
+
 ---
 
 ## 4. 验证记录
@@ -142,9 +185,32 @@ all checks passed
 - `fastxl-cli convert --compress-level 0` 生成的 XLSX 可正常 `preview`。
 - `xmake install -o build/install-test fastxl-core fastxl-cli` 目录布局正确。
 
+### Linux 验证（M7）
+
+```sh
+xmake build -y fastxl-tests fastxl-cli fastxl-python
+./build/linux/x86_64/release/fastxl-tests
+python projects/tests/test_cli.py
+python projects/tests/test_python.py
+python projects/tests/test_mcp.py
+```
+
+结果：
+
+```text
+122 tests, 0 failures
+CLI checks passed
+Python checks passed
+MCP checks passed
+```
+
+- `--max-bytes` 的五个命令输出均通过 `docs/probe.schema.json` 校验（含 `budget` 对象）。
+- `test_python.py` 中 native 与 CLI 的 `info` / `probe` / `search` 输出逐字段一致。
+- `build/python/fastxl/_fastxl.so` 为 CPython 3.14 构建，与 `.venv` 解释器匹配。
+
 ### 验证边界
 
-- 当前仅在本机 **Windows x64** 验证；Linux x86_64 / aarch64、AVX2/NEON 与 mmap 的跨平台行为需要 CI。
+- Windows x64（原作者）与 Linux x86_64（本次）均已本地验证；aarch64、NEON 与 mmap 的跨平台行为仍需要 CI。
 - 尚无正式 wall-clock benchmark 数据；不要在报告中引用未记录的加速比。
 
 ---
@@ -162,28 +228,20 @@ all checks passed
 | Writer API | `include/fastxl/writer.hpp` |
 | CLI | `projects/fastxl-cli/src/cmd_*.cpp` |
 | Python / MCP | `bindings/fastxl_module.cpp`、`bindings/python/fastxl/`、`projects/tools/fastxl_mcp.py` |
+| 输出预算 | `projects/fastxl-cli/src/json_budget.hpp` |
+| 测试 | `projects/tests/test_cli.py`、`test_python.py`、`test_mcp.py` |
 | 契约 | `docs/probe.schema.json`、`docs/ai.md`、`docs/library.md` |
 
 ---
 
 ## 6. 剩余工作
 
-### M7 — MCP 常驻化与输出预算
-
-- 新增 `fastxl.Session`，缓存已打开 `WorkBook`。
-- MCP 默认 native-first；`fastxl.Session` LRU（最多 8 个），按 `(mtime_ns, size)` 失效。
-- `fastxl_info` / `preview` / `schema` / `probe` / `search` 支持 `max_bytes`。
-- `json_budget.hpp` / Python 侧预算裁剪：折叠空列、常量列、样本与元数据，输出 `budget` 对象。
-- CSV/JSONL 走模块级函数，不建立 Session。
-
 ### M8 — 验证与文档收尾
 
 - 生成 fixtures：`metadata.xlsx`、`multi.xlsx`、`large.xlsx`、`search.xlsx`、`regions.xlsx`、`budget.xlsx`。
-- 增加 `test_cli.py`、`test_python.py`、`test_mcp.py`、`bench.py`。
-- 全量跑通 CLI / Python / MCP / C++ 测试。
-- 补齐 Linux / aarch64 CI 验证，并更新 README、`docs/ai.md`、`docs/library.md`、`docs/limitations.md`、skill 文档。
-
----
+- 增加 `bench.py`，补上 wall-clock 与内存基线，避免引用未测量的加速比。
+- 补齐 Linux / aarch64 CI 验证，并复核 skill 文档中的示例。
+- 复核两个已知的边界：`fastxl_preview` 仍走 CLI（native 行读取契约不同）；`Session` 只缓存 workbook 级解析，行流式读取不缓存。
 
 ## 7. 使用与构建
 

@@ -190,6 +190,45 @@ and header, then `schema --header-row auto --max-rows 200000 --jobs 4`. Use
 `preview --range` and `--columns` for wide sheets before paying for a full
 profile.
 
+## Output budget
+
+Every JSON contract can be capped for a context window: `--max-bytes N` on the
+CLI, or `max_bytes=N` in Python and MCP. The payload is folded in stages,
+cheapest first, and a `budget` object records what happened:
+
+| stage | folded |
+| --- | --- |
+| `samples` | per-column sample values |
+| `top_values` | per-column value counts |
+| `empty_columns` | columns that are null for every row (removed, listed in `folded_columns`) |
+| `enum_values` | validation enums re-emitted as values |
+| `metadata` | merged cells, hidden rows, formula links, tables, comments, pivots, charts, defined names |
+| `constant_columns` | numeric/text statistics of single-valued columns |
+| `rows` / `matches` | trailing preview rows and search hits (sets `truncated`) |
+| `columns` | trailing columns of very wide sheets |
+
+```json
+"budget": {
+  "max_bytes": 2000,
+  "bytes": 1948,
+  "applied": true,
+  "within_budget": true,
+  "stages": {"samples": 12, "empty_columns": 2},
+  "folded_columns": [{"reason": "empty", "index": 7, "name": "note"}],
+  "dropped_rows": 3
+}
+```
+
+`within_budget` is false only when even the last stage cannot meet the cap; the
+payload stays valid JSON and is never cut mid-document. The report counts
+against the cap too, so its detail is dropped (keeping the counts) when it would
+not fit. `--max-bytes` only affects `--format jsonl`; text/table output is
+already bounded by its own row/column limits.
+
+Practical use: ask for `--max-bytes 4000` first. If `applied` is true, re-request
+with `--columns`/`--sheet` (CLI) or a smaller `--sample`/`--top` rather than
+raising the cap blindly.
+
 ## Python bindings
 
 `bindings/fastxl_module.cpp` exposes the probe/schema/preview surface directly
@@ -214,6 +253,23 @@ name or a 1-based index. `read_rows`/`preview` return typed rows (`int`, `float`
 `fastxl.Error`, a `RuntimeError` subclass carrying the stable fastxl code in
 `.code`.
 
+Every read function accepts `max_bytes=0` and returns the same `budget` object as
+the CLI. For repeated calls against the same file, keep a `Session`: it caches the
+opened workbook (shared strings and styles parsed once), invalidates the entry
+when the file's `(mtime, size)` changes, and evicts the least recently used entry
+past `capacity` (default 8):
+
+```python
+with fastxl.Session(capacity=8) as session:
+    schema = session.schema("book.xlsx", max_bytes=4000)
+    hits = session.search("book.xlsx", "invoice", max_hits=20)
+    print(session.stats())   # {'size': 1, 'capacity': 8, 'hits': 1, 'misses': 1}
+```
+
+`Session` covers `info`/`schema`/`probe`/`search` (workbook-level parsing);
+`preview`/`read_rows` delegate to the streaming readers, which own their
+decompression stream.
+
 The package ships PEP 561 type information (`_fastxl.pyi` plus `py.typed`); the
 repository's `pyrightconfig.json` type-checks the skill and stubs with zero
 errors. See [bindings/README.md](../bindings/README.md) for the full API,
@@ -223,17 +279,26 @@ is authored at `skill/` in this repository and documented in
 
 ## MCP
 
-`projects/tools/fastxl_mcp.py` wraps the four read commands as MCP tools over stdio. It
-uses only the Python standard library and shells out to `fastxl-cli`:
+`projects/tools/fastxl_mcp.py` exposes the probes as MCP tools over stdio and is
+native-first: when the compiled module is importable (in-tree `build/python` or
+an installed package) it answers in-process through one long-lived
+`fastxl.Session`, so repeated calls skip the OPC and shared-string parse. Without
+the module, or with `FASTXL_FORCE_CLI=1` / `--cli-only`, it shells out to
+`fastxl-cli`:
 
 ```sh
-python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli   # .exe on Windows
+python projects/tools/fastxl_mcp.py                            # native when available
+python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli # .exe on Windows
+FASTXL_FORCE_CLI=1 python projects/tools/fastxl_mcp.py
 ```
 
 Tools: `fastxl_info`, `fastxl_preview`, `fastxl_schema`, `fastxl_probe`,
-`fastxl_search`. Tool
-results are the same JSON objects documented here; CLI failures become
-`isError: true` with the structured error text.
+`fastxl_search`. Every tool accepts `max_bytes`, and `initialize` reports the
+active backend in `serverInfo.mode` (`native` or `cli`). Tool results are the
+same JSON objects documented here, with one exception: `fastxl_preview` always
+uses the CLI, because its payload (used range, header row, merge metadata)
+follows the preview contract rather than the native row-reader contract. CLI and
+native failures both become `isError: true` with the structured error text.
 
 ## Reading values as text
 

@@ -12,6 +12,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "json_budget.hpp"
 #include "metadata_json.hpp"
 #include "table.hpp"
 
@@ -344,6 +345,7 @@ int run_probe(const Args& args) {
   root["header_auto"] = args.header_auto;
   root["defined_names"] = defined_names_json(defined_names);
   if (args.format == OutputFormat::Jsonl) {
+    apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());
   } else if (args.format == OutputFormat::Table) {
     print_probe_table(root);

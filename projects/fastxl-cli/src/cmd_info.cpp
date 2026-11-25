@@ -9,6 +9,7 @@
 
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
+#include "json_budget.hpp"
 #include "metadata_json.hpp"
 #include "table.hpp"
 
@@ -93,6 +94,7 @@ int run_info(const Args& args) {
   root["sheets"] = std::move(sheets);
 
   if (args.format == OutputFormat::Jsonl) {
+    apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());
     return 0;
   }

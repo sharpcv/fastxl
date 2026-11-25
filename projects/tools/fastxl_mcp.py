@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Minimal MCP stdio server for fastxl-cli.
+"""MCP stdio server for fastxl.
 
 Exposes read-only spreadsheet probes as MCP tools:
     fastxl_info, fastxl_preview, fastxl_schema, fastxl_probe, fastxl_search
 
+The server is native-first: when the compiled ``fastxl`` module is importable it
+answers in-process through ``fastxl.Session``, which keeps the parsed workbook
+cached across calls. Otherwise, or when ``FASTXL_FORCE_CLI=1`` is set, it shells
+out to ``fastxl-cli``.
+
 Usage:
+    python projects/tools/fastxl_mcp.py
     python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli
+    FASTXL_FORCE_CLI=1 python projects/tools/fastxl_mcp.py
 
 (``fastxl-cli.exe`` on Windows.)
 
@@ -41,7 +48,104 @@ def find_cli(explicit):
     found = shutil.which("fastxl-cli")
     if found:
         return Path(found)
-    raise SystemExit("fastxl-cli not found; pass --cli or set FASTXL_CLI")
+    return None
+
+
+def load_native():
+    """Imports the compiled module, preferring the in-tree build."""
+    if os.environ.get("FASTXL_FORCE_CLI"):
+        return None
+    try:
+        import fastxl  # noqa: F401  (already installed)
+
+        return fastxl
+    except Exception:
+        pass
+    build_dir = ROOT / "build" / "python"
+    if build_dir.is_dir():
+        sys.path.insert(0, str(build_dir))
+        try:
+            import fastxl
+
+            return fastxl
+        except Exception:
+            sys.path.pop(0)
+    return None
+
+
+NATIVE = load_native()
+SESSION = NATIVE.Session() if NATIVE is not None else None
+
+# fastxl_preview stays on the CLI: its payload is the sheet preview (used range,
+# header row, merged cells), while the native row reader exposes a different
+# contract. The other four probe the workbook and reuse the Session cache.
+NATIVE_METHODS = {
+    "fastxl_info": "info",
+    "fastxl_schema": "schema",
+    "fastxl_probe": "probe",
+    "fastxl_search": "search",
+}
+
+# Options the native module understands; anything else (range/columns
+# projections) needs the CLI, which has the richer argument surface.
+NATIVE_OPTIONS = {
+    "info": {"format", "max_bytes"},
+    "schema": {
+        "sheet",
+        "header_row",
+        "sample",
+        "top",
+        "distinct_cap",
+        "jobs",
+        "max_rows",
+        "regions",
+        "max_bytes",
+    },
+    "probe": {
+        "sheet",
+        "header_row",
+        "sample",
+        "top",
+        "distinct_cap",
+        "jobs",
+        "max_rows",
+        "regions",
+        "max_bytes",
+    },
+    "search": {
+        "query",
+        "regex",
+        "ignore_case",
+        "context",
+        "max_hits",
+        "max_cell_bytes",
+        "sheet",
+        "max_bytes",
+    },
+}
+
+
+def native_call(name, arguments):
+    """Returns the JSON text of a native answer, or None when the CLI is needed."""
+    if SESSION is None:
+        return None
+    method = NATIVE_METHODS.get(name)
+    if method is None:
+        return None
+    options = NATIVE_OPTIONS[method]
+    kwargs = {}
+    for key, value in arguments.items():
+        if key == "file" or value is None:
+            continue
+        if key not in options:
+            return None
+        kwargs[key] = value
+    try:
+        payload = getattr(SESSION, method)(str(arguments["file"]), **kwargs)
+    except Exception as error:  # fall back to the CLI for its error rendering
+        print("native %s failed: %s" % (method, error), file=sys.stderr)
+        return None
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def header_args(value):
@@ -95,7 +199,14 @@ TOOL_SCHEMAS = {
         "description": "Workbook metadata: sheet names, visibility, parts, sizes. xlsx only.",
         "inputSchema": {
             "type": "object",
-            "properties": {"file": {"type": "string", "description": "Path to an .xlsx file"}},
+            "properties": {
+                "file": {"type": "string", "description": "Path to an .xlsx file"},
+                "max_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Fold the JSON payload to this many bytes (0 = unlimited)",
+                },
+            },
             "required": ["file"],
             "additionalProperties": False,
         },
@@ -115,6 +226,7 @@ TOOL_SCHEMAS = {
                 "range": {"type": "string", "description": "A1 range, e.g. A1:F20"},
                 "columns": {"type": "string", "description": "1-based projection, e.g. 1,3-5"},
                 "max_cell_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+                "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file"],
             "additionalProperties": False,
@@ -135,6 +247,7 @@ TOOL_SCHEMAS = {
                 "top": {"type": "integer", "minimum": 0, "maximum": 1000},
                 "distinct_cap": {"type": "integer", "minimum": 0},
                 "jobs": {"type": "integer", "minimum": 0, "maximum": 1024},
+                "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file"],
             "additionalProperties": False,
@@ -155,6 +268,7 @@ TOOL_SCHEMAS = {
                 "top": {"type": "integer", "minimum": 0, "maximum": 1000},
                 "distinct_cap": {"type": "integer", "minimum": 0},
                 "jobs": {"type": "integer", "minimum": 0, "maximum": 1024},
+                "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file"],
             "additionalProperties": False,
@@ -172,6 +286,7 @@ TOOL_SCHEMAS = {
                 "context": {"type": "integer", "minimum": 0, "maximum": 10},
                 "max_hits": {"type": "integer", "minimum": 0, "maximum": 1000000},
                 "sheet": {"type": ["string", "integer"]},
+                "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file", "query"],
             "additionalProperties": False,
@@ -180,9 +295,9 @@ TOOL_SCHEMAS = {
 }
 
 
-def call_tool(cli, name, arguments):
-    if name not in TOOL_SCHEMAS:
-        return None, "unknown tool: " + name
+def cli_call(cli, name, arguments):
+    if cli is None:
+        return None, "fastxl-cli not found; pass --cli, set FASTXL_CLI, or build the native module"
     try:
         args = common_args(arguments, "info" if name == "fastxl_info" else name[len("fastxl_"):])
         result = subprocess.run([str(cli), *args], capture_output=True)
@@ -197,7 +312,16 @@ def call_tool(cli, name, arguments):
         payload = json.loads(stdout)
     except json.JSONDecodeError:
         return stdout.strip(), None
-    return json.dumps(payload, ensure_ascii=False), None
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")), None
+
+
+def call_tool(cli, name, arguments):
+    if name not in TOOL_SCHEMAS:
+        return None, "unknown tool: " + name
+    text = native_call(name, arguments)
+    if text is not None:
+        return text, None
+    return cli_call(cli, name, arguments)
 
 
 def handle(cli, message):
@@ -206,7 +330,11 @@ def handle(cli, message):
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "fastxl", "version": "1.0.0"},
+            "serverInfo": {
+                "name": "fastxl",
+                "version": "1.0.0",
+                "mode": "native" if SESSION is not None else "cli",
+            },
         }
     if method == "ping":
         return {}
@@ -235,9 +363,23 @@ def handle(cli, message):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cli", default=None)
+    parser.add_argument("--cli", default=None, help="fastxl-cli path for the fallback")
+    parser.add_argument(
+        "--cli-only",
+        action="store_true",
+        help="always shell out to fastxl-cli instead of using the native module",
+    )
     args = parser.parse_args()
+    global SESSION
+    if args.cli_only:
+        SESSION = None
+    # The CLI is still needed for preview and as the fallback.
     cli = find_cli(args.cli)
+    print(
+        "fastxl mcp: %s mode"
+        % ("native" if SESSION is not None else "cli"),
+        file=sys.stderr,
+    )
 
     for line in sys.stdin:
         line = line.strip()

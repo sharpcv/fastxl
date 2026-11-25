@@ -1063,16 +1063,22 @@ CLI 退出码：
 ## 13. CLI 速览
 
 ```sh
-fastxl-cli info <file.xlsx> [--format text|table|jsonl]
+fastxl-cli info <file.xlsx> [--max-bytes N] [--format text|table|jsonl]
 fastxl-cli preview <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--rows N] [--range A1:F20] [--columns 1,3-5]
-                          [--max-cell-bytes N] [--format text|table|jsonl]
+                          [--max-cell-bytes N] [--max-bytes N]
+                          [--format text|table|jsonl]
 fastxl-cli probe <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
-                          [--distinct-cap N] [--jobs N] [--format text|table|jsonl]
+                          [--distinct-cap N] [--jobs N] [--max-bytes N]
+                          [--format text|table|jsonl]
 fastxl-cli schema <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
-                          [--distinct-cap N] [--jobs N] [--format text|table|jsonl]
+                          [--distinct-cap N] [--jobs N] [--max-bytes N]
+                          [--format text|table|jsonl]
+fastxl-cli search <file|-> --query TEXT [--regex] [--case-sensitive]
+                          [--context N] [--max-hits N] [--max-cell-bytes N]
+                          [--sheet ...] [--max-bytes N] [--format text|table|jsonl]
 fastxl-cli convert <in|-> --out <out|-> [--from ...] [--to ...]
                           [--sheet ...] [--header-row N|--no-header]
                           [--delimiter C] [--infer|--no-infer]
@@ -1100,8 +1106,14 @@ fastxl-cli <command> --help
   `{"version":1,"ok":false,"error":{"code":...,"message":...,"exit_code":...}}`。
 - 人读表格会把过长单元格截断为 `…`，`preview` 默认最多显示 12 列；脚本请用
   `--format jsonl`。
-- MCP 包装：`python projects/tools/fastxl_mcp.py --cli <fastxl-cli>`；工具名为
-  `fastxl_info`、`fastxl_preview`、`fastxl_schema`、`fastxl_probe`。
+- `--max-bytes N` 只作用于 `--format jsonl`：按阶段折叠样本、值频次、全空列、
+  枚举、元数据、单值列统计、尾部行与尾部列，并输出 `budget` 对象
+  （`max_bytes`/`bytes`/`applied`/`within_budget`/`stages`/`folded_columns`）。
+  永不截断 JSON；无法塞进预算时如实返回 `"within_budget": false`。
+- MCP 包装：`python projects/tools/fastxl_mcp.py [--cli <fastxl-cli>]`，默认
+  native-first（进程内 `fastxl.Session`），模块不可用或设置 `FASTXL_FORCE_CLI=1`
+  时回落到 CLI；工具名为 `fastxl_info`、`fastxl_preview`、`fastxl_schema`、
+  `fastxl_probe`、`fastxl_search`，均支持 `max_bytes`。
 
 ---
 

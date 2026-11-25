@@ -16,7 +16,8 @@ models and code generators can inspect spreadsheets without pandas or openpyxl.
 - **One value model** — typed `CellView` with a canonical text form across all
   formats.
 - **AI-ready** — `info` / `preview` / `schema` / `probe` / `search` return one
-  JSON contract; packaged as an agent skill and MCP server.
+  JSON contract with an optional byte budget; packaged as an agent skill and a
+  native-first MCP server (one cached `Session` per process).
 - **No formula engine** — reads cached values and preserves `<f>` text on write;
   legacy `.xls` / CFB is rejected.
 
@@ -36,6 +37,7 @@ build/bin/fastxl-cli probe book.xlsx --format jsonl --sheet Data --jobs 4 --max-
 build/bin/fastxl-cli preview book.xlsx --rows 20
 build/bin/fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl
 build/bin/fastxl-cli schema book.xlsx --regions --header-row auto --format jsonl
+build/bin/fastxl-cli probe book.xlsx --format jsonl --max-bytes 4000 --sheet Data
 build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 ```
 
@@ -44,6 +46,12 @@ build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
 aligned table on every report), or `jsonl` (the machine contract; `--json` is an
 alias). A bare `--format` with no value also means `text`. Human output truncates
 long cells with `…` and caps wide tables, so use `--format jsonl` for scripts.
+
+`--max-bytes N` caps a JSON payload for a context window: the reply is folded in
+stages (samples, top values, empty columns, enums, metadata, constant-column
+stats, trailing rows, trailing columns) and reports what happened in a `budget`
+object. The payload always stays valid JSON and `within_budget` says whether the
+cap was met. See [docs/ai.md](docs/ai.md#output-budget).
 
 `fastxl-cli --version` also lists the versions of the linked libraries
 (minizip-ng, zlib-ng, fast_float, simdutf, fmt, nlohmann_json).
@@ -60,6 +68,11 @@ fastxl.probe("book.xlsx", sheet="Data", max_rows=200_000, jobs=4)
 fastxl.search("book.xlsx", "invoice", context=2)
 rows = fastxl.preview("book.xlsx", sheet="Data", rows=20, with_cells=True)
 fastxl.write_xlsx("result.xlsx", rows["rows"], sheet_name="Result")
+
+# keep the workbook warm across calls; invalidates on (mtime, size)
+with fastxl.Session() as session:
+    session.schema("book.xlsx", sheet="Data", max_bytes=4000)
+    session.search("book.xlsx", "invoice", max_hits=20)
 ```
 
 Machine-facing payloads start with `{"version":1,"ok":true}`; failures are a

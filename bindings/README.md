@@ -59,6 +59,7 @@ fastxl.schema("book.xlsx", sheet="Data", header_row="auto")
 fastxl.probe("book.xlsx", sheet="Data", max_rows=200_000)
 fastxl.preview("book.xlsx", sheet="Data", rows=20)
 fastxl.read_rows("book.xlsx", limit=100)
+fastxl.search("book.xlsx", "invoice", max_hits=20)
 fastxl.write_xlsx("out.xlsx", [{"a": 1, "b": "x"}], sheet_name="Data")
 ```
 
@@ -72,6 +73,22 @@ rows. Failures raise `fastxl.Error`, a `RuntimeError` subclass carrying the
 stable fastxl code in `.code` (`FileNotFound`, `InvalidSheetRef`, `EmptyTable`,
 ...). `preview` reports the resolved worksheet name in `sheet`; cells beyond the
 header-derived column set are counted in `extra_cells`.
+
+Every read function accepts `max_bytes=0`; a positive value folds the payload and
+adds a `budget` object (`max_bytes`, `bytes`, `applied`, `within_budget`,
+`stages`, `folded_columns`) identical to the CLI's `--max-bytes`.
+
+For repeated calls against the same file, keep a `Session`: it caches the opened
+workbook, invalidates on `(mtime, size)` changes and evicts the least recently
+used entry past `capacity` (default 8). It covers `info`/`schema`/`probe`/
+`search`; `preview`/`read_rows` stream rows and are not cached.
+
+```python
+with fastxl.Session(capacity=8) as session:
+    profile = session.probe("book.xlsx", max_bytes=4000)
+    hits = session.search("book.xlsx", "invoice")
+    print(session.stats())  # size, capacity, hits, misses
+```
 
 The package is PEP 561 typed: `_fastxl.pyi` describes every function and result
 shape, and `py.typed` marks the distribution. Run `pyright` at the repository

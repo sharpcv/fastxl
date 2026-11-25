@@ -8,18 +8,23 @@
 
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "json_budget.hpp"
 #include "metadata_json.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <list>
 #include <map>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -152,6 +157,49 @@ py::object json_to_py(const Json& value) {
   for (auto it = value.begin(); it != value.end(); ++it)
     out[py::str(it.key())] = json_to_py(it.value());
   return out;
+}
+
+// Inverse of json_to_py for the plain values the probe payloads contain.
+Json py_to_json(py::handle value) {
+  if (value.is_none()) return nullptr;
+  if (py::isinstance<py::bool_>(value)) return Json(py::cast<bool>(value));
+  if (py::isinstance<py::int_>(value)) {
+    try {
+      return Json(py::cast<int64_t>(value));
+    } catch (const py::cast_error&) {
+      // Fall through to the generic string form for oversized integers.
+    }
+  }
+  if (py::isinstance<py::float_>(value)) return Json(py::cast<double>(value));
+  if (py::isinstance<py::str>(value)) return Json(py::cast<std::string>(value));
+  if (py::isinstance<py::dict>(value)) {
+    Json out = Json::object();
+    for (auto item : py::reinterpret_borrow<py::dict>(value))
+      out[py::cast<std::string>(item.first)] = py_to_json(item.second);
+    return out;
+  }
+  if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
+    Json out = Json::array();
+    for (py::handle item : py::reinterpret_borrow<py::sequence>(value))
+      out.push_back(py_to_json(item));
+    return out;
+  }
+  return Json(py::str(value).cast<std::string>());
+}
+
+// Native results carry the same `budget` object as the CLI JSONL contract.
+py::dict json_result(Json& root, size_t max_bytes) {
+  fastxl_cli::apply_output_budget(root, max_bytes);
+  return json_to_py(root).cast<py::dict>();
+}
+
+// Row payloads are built as Python objects; route them through the same budget
+// implementation when a cap is requested.
+py::dict budget_dict(py::dict root, size_t max_bytes) {
+  if (max_bytes == 0) return root;
+  Json json = py_to_json(root);
+  fastxl_cli::apply_output_budget(json, max_bytes);
+  return json_to_py(json).cast<py::dict>();
 }
 
 Json number_or_null(double value) {
@@ -451,14 +499,16 @@ struct ProbeBuild {
   std::vector<DefinedName> defined_names;
 };
 
-ProbeBuild build_profile(const ProbeArgs& args) {
+ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr) {
   const Format format = resolve_format(args.file, args.format);
   const std::filesystem::path path = utf8_path(args.file);
   ProfileOptions options = profile_options(args);
   ProbeBuild build;
 
   if (format == Format::Xlsx) {
-    WorkBook workbook = WorkBook::open(path);
+    std::optional<WorkBook> opened;
+    if (cached == nullptr) opened.emplace(WorkBook::open(path));
+    const WorkBook& workbook = cached != nullptr ? *cached : *opened;
     const size_t index = resolve_sheet_index(workbook, args.sheet);
     if (args.header_auto) options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
     build.profile = profile_sheet(workbook, index, options);
@@ -500,15 +550,9 @@ ProbeBuild build_profile(const ProbeArgs& args) {
   return build;
 }
 
-py::dict info(const std::string& file, const std::string& format_name) {
-  const Format format = resolve_format(file, format_name);
-  if (format != Format::Xlsx && format != Format::Auto)
-    throw Exception(ErrorCode::UnsupportedFormat,
-                    "info supports xlsx workbooks only; use schema/probe for csv/jsonl");
+// Workbook metadata shared by the module function and Session.info().
+Json info_json(const WorkBook& workbook, const std::string& file) {
   const std::filesystem::path path = utf8_path(file);
-  OpenOptions open_options;
-  open_options.shared_strings = SharedStringMode::Count;
-  WorkBook workbook = WorkBook::open(path, open_options);
   std::error_code ec;
   const uint64_t size_bytes = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
 
@@ -542,13 +586,25 @@ py::dict info(const std::string& file, const std::string& format_name) {
     sheets.push_back(std::move(entry));
   }
   root["sheets"] = std::move(sheets);
-  return json_to_py(root).cast<py::dict>();
+  return root;
 }
 
-py::dict probe(const std::string& file, py::object sheet, py::object header_row,
-               const std::string& format, bool infer, std::string delimiter,
-               bool fill_gaps, size_t max_rows, size_t sample, size_t top,
-               size_t distinct_cap, unsigned jobs, bool regions) {
+py::dict info(const std::string& file, const std::string& format_name, size_t max_bytes) {
+  const Format format = resolve_format(file, format_name);
+  if (format != Format::Xlsx && format != Format::Auto)
+    throw Exception(ErrorCode::UnsupportedFormat,
+                    "info supports xlsx workbooks only; use schema/probe for csv/jsonl");
+  OpenOptions open_options;
+  open_options.shared_strings = SharedStringMode::Count;
+  WorkBook workbook = WorkBook::open(utf8_path(file), open_options);
+  Json root = info_json(workbook, file);
+  return json_result(root, max_bytes);
+}
+
+ProbeArgs make_probe_args(const std::string& file, py::object sheet, py::object header_row,
+                          const std::string& format, bool infer, std::string delimiter,
+                          bool fill_gaps, size_t max_rows, size_t sample, size_t top,
+                          size_t distinct_cap, unsigned jobs, bool regions) {
   ProbeArgs args;
   args.file = file;
   args.sheet = sheet_selector(sheet);
@@ -563,7 +619,11 @@ py::dict probe(const std::string& file, py::object sheet, py::object header_row,
   args.jobs = jobs;
   args.regions = regions;
   args.header_row = header_value(header_row, args.header_auto);
-  ProbeBuild build = build_profile(args);
+  return args;
+}
+
+Json probe_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
+  ProbeBuild build = build_profile(args, cached);
   Json root = profile_json(build.profile);
   root["header_auto"] = args.header_auto;
   root["defined_names"] = fastxl_cli::defined_names_json(build.defined_names);
@@ -580,33 +640,26 @@ py::dict probe(const std::string& file, py::object sheet, py::object header_row,
     }
     root["regions"] = std::move(regions_json);
   }
-  return json_to_py(root).cast<py::dict>();
+  return root;
 }
 
-py::dict schema(const std::string& file, py::object sheet, py::object header_row,
-                const std::string& format, bool infer, std::string delimiter,
-                bool fill_gaps, size_t max_rows, size_t sample, size_t top,
-                size_t distinct_cap, unsigned jobs, bool regions) {
-  ProbeArgs args;
-  args.file = file;
-  args.sheet = sheet_selector(sheet);
-  args.format = format;
-  args.infer = infer;
-  args.delimiter = delimiter_value(delimiter);
-  args.fill_gaps = fill_gaps;
-  args.max_rows = max_rows;
-  args.sample = sample;
-  args.top = top;
-  args.distinct_cap = distinct_cap;
-  args.jobs = jobs;
-  args.regions = regions;
-  args.header_row = header_value(header_row, args.header_auto);
+py::dict probe(const std::string& file, py::object sheet, py::object header_row,
+               const std::string& format, bool infer, std::string delimiter,
+               bool fill_gaps, size_t max_rows, size_t sample, size_t top,
+               size_t distinct_cap, unsigned jobs, bool regions, size_t max_bytes) {
+  ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer, std::move(delimiter),
+                                   fill_gaps, max_rows, sample, top, distinct_cap, jobs,
+                                   regions);
+  Json root = probe_json(args);
+  return json_result(root, max_bytes);
+}
 
-  const Format resolved = resolve_format(file, format);
+Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
+  const Format resolved = resolve_format(args.file, args.format);
   Json root;
   root["version"] = 1;
   root["ok"] = true;
-  root["file"] = file;
+  root["file"] = args.file;
   root["format"] = std::string(to_string(resolved));
   root["header_auto"] = args.header_auto;
   Json sheets = Json::array();
@@ -616,8 +669,9 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
   std::vector<std::pair<std::string, const SheetProfile*>> join_sheets;
 
   if (resolved == Format::Xlsx) {
-    const std::filesystem::path path = utf8_path(file);
-    WorkBook workbook = WorkBook::open(path);
+    std::optional<WorkBook> opened;
+    if (cached == nullptr) opened.emplace(WorkBook::open(utf8_path(args.file)));
+    const WorkBook& workbook = cached != nullptr ? *cached : *opened;
     defined_names.assign(workbook.defined_names().begin(), workbook.defined_names().end());
     defined_names_truncated = workbook.defined_names_truncated();
     std::vector<size_t> indices;
@@ -650,7 +704,7 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
     for (size_t i = 0; i < indices.size(); ++i) {
       const size_t index = indices[i];
       SheetProfile& profile = profiles[i];
-      profile.file = file;
+      profile.file = args.file;
       const std::string name = std::string(workbook.sheets()[index].name());
       join_sheets.emplace_back(name, &profile);
       const std::string_view state = sheet_state_name(workbook.sheets()[index].state());
@@ -681,7 +735,18 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
   root["defined_names"] = fastxl_cli::defined_names_json(defined_names);
   if (defined_names_truncated) root["defined_names_truncated"] = true;
   root["join_keys"] = fastxl_cli::join_keys_json(join_sheets);
-  return json_to_py(root).cast<py::dict>();
+  return root;
+}
+
+py::dict schema(const std::string& file, py::object sheet, py::object header_row,
+                const std::string& format, bool infer, std::string delimiter,
+                bool fill_gaps, size_t max_rows, size_t sample, size_t top,
+                size_t distinct_cap, unsigned jobs, bool regions, size_t max_bytes) {
+  ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer, std::move(delimiter),
+                                   fill_gaps, max_rows, sample, top, distinct_cap, jobs,
+                                   regions);
+  Json root = schema_json(args);
+  return json_result(root, max_bytes);
 }
 
 std::vector<std::string> unique_names(std::span<const std::string_view> raw) {
@@ -738,7 +803,7 @@ std::string_view preview_type_name(CellType type) {
 py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
                    const std::string& format, size_t limit, size_t offset,
                    bool as_dicts, bool infer, std::string delimiter, bool fill_gaps,
-                   size_t max_columns, bool with_cells) {
+                   size_t max_columns, bool with_cells, size_t max_bytes) {
   ProbeArgs args;
   args.file = file;
   args.sheet = sheet_selector(sheet);
@@ -880,27 +945,19 @@ py::dict read_rows(const std::string& file, py::object sheet, py::object header_
   root["truncated"] = truncated;
   root["rows_read"] = emitted;
   root["extra_cells"] = reader->extra_cells();
-  return root;
+  return budget_dict(std::move(root), max_bytes);
 }
 
-py::dict search(const std::string& file, const std::string& query, bool regex,
-                bool ignore_case, uint32_t context, size_t max_hits,
-                size_t max_cell_bytes, py::object sheet, const std::string& format) {
+Json search_json(const std::string& file, const SearchOptions& options,
+                 const std::string& format = "", const WorkBook* cached = nullptr) {
   const Format resolved = resolve_format(file, format);
   const std::filesystem::path path = utf8_path(file);
-  SearchOptions options;
-  options.query = query;
-  options.regex = regex;
-  options.ignore_case = ignore_case;
-  options.context = context;
-  options.max_hits = max_hits;
-  options.max_cell_bytes = max_cell_bytes;
-  options.sheet = sheet_selector(sheet);
 
   SearchResult result;
   if (resolved == Format::Xlsx) {
-    WorkBook workbook = WorkBook::open(path);
-    result = search_workbook(workbook, options);
+    std::optional<WorkBook> opened;
+    if (cached == nullptr) opened.emplace(WorkBook::open(path));
+    result = search_workbook(cached != nullptr ? *cached : *opened, options);
   } else if (resolved == Format::Csv || resolved == Format::Jsonl) {
     ReadOptions read_options;
     read_options.format = resolved;
@@ -923,9 +980,9 @@ py::dict search(const std::string& file, const std::string& query, bool regex,
   root["version"] = 1;
   root["ok"] = true;
   root["file"] = file;
-  root["query"] = query;
-  root["regex"] = regex;
-  root["ignore_case"] = ignore_case;
+  root["query"] = options.query;
+  root["regex"] = options.regex;
+  root["ignore_case"] = options.ignore_case;
   Json matches = Json::array();
   for (const SearchHit& hit : result.hits) {
     Json entry;
@@ -949,15 +1006,39 @@ py::dict search(const std::string& file, const std::string& query, bool regex,
   root["match_count"] = result.hits.size();
   root["truncated"] = result.truncated;
   root["searched_cells"] = result.searched_cells;
-  return json_to_py(root).cast<py::dict>();
+  return root;
+}
+
+SearchOptions make_search_options(const std::string& query, bool regex, bool ignore_case,
+                                  uint32_t context, size_t max_hits, size_t max_cell_bytes,
+                                  py::object sheet) {
+  SearchOptions options;
+  options.query = query;
+  options.regex = regex;
+  options.ignore_case = ignore_case;
+  options.context = context;
+  options.max_hits = max_hits;
+  options.max_cell_bytes = max_cell_bytes;
+  options.sheet = sheet_selector(sheet);
+  return options;
+}
+
+py::dict search(const std::string& file, const std::string& query, bool regex,
+                bool ignore_case, uint32_t context, size_t max_hits,
+                size_t max_cell_bytes, py::object sheet, const std::string& format,
+                size_t max_bytes) {
+  SearchOptions options =
+      make_search_options(query, regex, ignore_case, context, max_hits, max_cell_bytes, sheet);
+  Json root = search_json(file, options, format);
+  return json_result(root, max_bytes);
 }
 
 py::dict preview(const std::string& file, py::object sheet, py::object header_row,
                  const std::string& format, size_t rows, size_t offset, bool as_dicts,
                  bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
-                 bool with_cells) {
+                 bool with_cells, size_t max_bytes) {
   return read_rows(file, sheet, header_row, format, rows, offset, as_dicts, infer,
-                   std::move(delimiter), fill_gaps, max_columns, with_cells);
+                   std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
 }
 
 CellView python_cell(py::handle value, std::string& text) {
@@ -1059,6 +1140,152 @@ size_t write_xlsx(const std::string& file, py::object rows, py::object columns,
   return written;
 }
 
+// Reuses opened workbooks across calls. The MCP server keeps one Session for the
+// lifetime of the process, so several tool calls share a single parse of the OPC
+// package, shared strings and styles. An entry is invalidated when the file's
+// (mtime, size) changes, and the least recently used entry is evicted past the
+// capacity (8 by default).
+class Session {
+public:
+  explicit Session(size_t capacity = 8) : capacity_(capacity == 0 ? 8 : capacity) {}
+
+  py::dict info(const std::string& file, const std::string& format, size_t max_bytes) {
+    const Format resolved = resolve_format(file, format);
+    if (resolved != Format::Xlsx && resolved != Format::Auto)
+      throw Exception(ErrorCode::UnsupportedFormat,
+                      "info supports xlsx workbooks only; use schema/probe for csv/jsonl");
+    Json root = info_json(cached_workbook(file), file);
+    return json_result(root, max_bytes);
+  }
+
+  py::dict schema(const std::string& file, py::object sheet, py::object header_row,
+                  const std::string& format, bool infer, std::string delimiter,
+                  bool fill_gaps, size_t max_rows, size_t sample, size_t top,
+                  size_t distinct_cap, unsigned jobs, bool regions, size_t max_bytes) {
+    ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
+                                     std::move(delimiter), fill_gaps, max_rows, sample, top,
+                                     distinct_cap, jobs, regions);
+    Json root = schema_json(args, cached_if_xlsx(file, format));
+    return json_result(root, max_bytes);
+  }
+
+  py::dict probe(const std::string& file, py::object sheet, py::object header_row,
+                 const std::string& format, bool infer, std::string delimiter,
+                 bool fill_gaps, size_t max_rows, size_t sample, size_t top,
+                 size_t distinct_cap, unsigned jobs, bool regions, size_t max_bytes) {
+    ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
+                                     std::move(delimiter), fill_gaps, max_rows, sample, top,
+                                     distinct_cap, jobs, regions);
+    Json root = probe_json(args, cached_if_xlsx(file, format));
+    return json_result(root, max_bytes);
+  }
+
+  py::dict search(const std::string& file, const std::string& query, bool regex,
+                  bool ignore_case, uint32_t context, size_t max_hits,
+                  size_t max_cell_bytes, py::object sheet, const std::string& format,
+                  size_t max_bytes) {
+    SearchOptions options = make_search_options(query, regex, ignore_case, context, max_hits,
+                                                max_cell_bytes, sheet);
+    Json root = search_json(file, options, format, cached_if_xlsx(file, format));
+    return json_result(root, max_bytes);
+  }
+
+  // Row streaming cannot reuse a workbook: the reader owns the decompression
+  // stream. These delegate to the module-level functions.
+  py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
+                     const std::string& format, size_t limit, size_t offset, bool as_dicts,
+                     bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
+                     bool with_cells, size_t max_bytes) {
+    return ::read_rows(file, sheet, header_row, format, limit, offset, as_dicts, infer,
+                       std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
+  }
+
+  py::dict preview(const std::string& file, py::object sheet, py::object header_row,
+                   const std::string& format, size_t rows, size_t offset, bool as_dicts,
+                   bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
+                   bool with_cells, size_t max_bytes) {
+    return ::preview(file, sheet, header_row, format, rows, offset, as_dicts, infer,
+                     std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
+  }
+
+  void clear() {
+    entries_.clear();
+    order_.clear();
+  }
+
+  py::dict stats() const {
+    py::dict out;
+    out["size"] = entries_.size();
+    out["capacity"] = capacity_;
+    out["hits"] = hits_;
+    out["misses"] = misses_;
+    return out;
+  }
+
+  size_t capacity() const noexcept { return capacity_; }
+  size_t size() const noexcept { return entries_.size(); }
+
+private:
+  struct Entry {
+    std::unique_ptr<WorkBook> book;
+    uint64_t mtime_ns = 0;
+    uint64_t size = 0;
+    std::list<std::string>::iterator order;
+  };
+
+  const WorkBook* cached_if_xlsx(const std::string& file, const std::string& format) {
+    if (resolve_format(file, format) != Format::Xlsx) return nullptr;
+    return &cached_workbook(file);
+  }
+
+  // Returns the cached workbook for `file`, opening and caching it when needed.
+  const WorkBook& cached_workbook(const std::string& file) {
+    const std::filesystem::path path = utf8_path(file);
+    std::error_code ec;
+    const uint64_t size = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
+    uint64_t stamp = 0;
+    const auto mtime = std::filesystem::last_write_time(path, ec);
+    if (!ec) {
+      stamp = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch())
+              .count());
+    }
+    const std::string key = path.lexically_normal().string();
+    auto found = entries_.find(key);
+    if (found != entries_.end() && found->second.mtime_ns == stamp &&
+        found->second.size == size) {
+      ++hits_;
+      order_.splice(order_.begin(), order_, found->second.order);
+      return *found->second.book;
+    }
+    ++misses_;
+    if (found != entries_.end()) {
+      order_.erase(found->second.order);
+      entries_.erase(found);
+    }
+    // Open first so a failure leaves the cache untouched.
+    std::unique_ptr<WorkBook> book = std::make_unique<WorkBook>(WorkBook::open(path));
+    while (entries_.size() >= capacity_ && !order_.empty()) {
+      entries_.erase(order_.back());
+      order_.pop_back();
+    }
+    order_.push_front(key);
+    Entry entry;
+    entry.book = std::move(book);
+    entry.mtime_ns = stamp;
+    entry.size = size;
+    entry.order = order_.begin();
+    auto inserted = entries_.emplace(key, std::move(entry));
+    return *inserted.first->second.book;
+  }
+
+  std::list<std::string> order_;
+  std::unordered_map<std::string, Entry> entries_;
+  size_t capacity_ = 8;
+  uint64_t hits_ = 0;
+  uint64_t misses_ = 0;
+};
+
 PyObject* error_type = nullptr;
 
 void translate_fastxl_error(std::exception_ptr p) {
@@ -1078,47 +1305,95 @@ void translate_fastxl_error(std::exception_ptr p) {
 } // namespace
 
 PYBIND11_MODULE(_fastxl, m) {
-  m.doc() = "Native fastxl bindings: info, schema, probe, preview, read_rows, write_xlsx";
+  m.doc() =
+      "Native fastxl bindings: info, schema, probe, preview, read_rows, search, "
+      "write_xlsx and Session";
   m.attr("__version__") = "1.0.0";
   m.attr("__build_python__") = py::make_tuple(PY_MAJOR_VERSION, PY_MINOR_VERSION);
   py::exception<fastxl::Exception> error(m, "Error", PyExc_RuntimeError);
   error_type = error.ptr();
   py::register_exception_translator(&translate_fastxl_error);
 
-  m.def("info", &info, py::arg("file"), py::arg("format") = "",
+  m.def("info", &info, py::arg("file"), py::arg("format") = "", py::arg("max_bytes") = 0,
         "Workbook metadata: sheet names, sizes, visibility.");
   m.def("schema", &schema, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
         py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
+        py::arg("max_bytes") = 0,
         "Compact column schema for code generation.");
   m.def("probe", &probe, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
         py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
+        py::arg("max_bytes") = 0,
         "Full per-column profile with type histogram and stats.");
   m.def("read_rows", &read_rows, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("limit") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_columns") = 16384, py::arg("with_cells") = false,
+        py::arg("max_bytes") = 0,
         "Read typed rows as dicts (or lists when as_dicts=False).");
   m.def("search", &search, py::arg("file"), py::arg("query"), py::arg("regex") = false,
         py::arg("ignore_case") = true, py::arg("context") = 1,
         py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
-        py::arg("sheet") = py::none(), py::arg("format") = "",
+        py::arg("sheet") = py::none(), py::arg("format") = "", py::arg("max_bytes") = 0,
         "Keyword/regex search with A1 hits and context windows.");
   m.def("preview", &preview, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_columns") = 16384, py::arg("with_cells") = false,
+        py::arg("max_bytes") = 0,
         "Alias for read_rows with a rows= parameter; with_cells=True returns "
         "A1 refs and cell types.");
   m.def("write_xlsx", &write_xlsx, py::arg("file"), py::arg("rows"),
         py::arg("columns") = py::none(), py::arg("sheet_name") = "Sheet1",
         py::arg("header") = true, py::arg("compression_level") = 6,
         "Write dicts or sequences to an xlsx workbook atomically.");
+
+  py::class_<Session>(m, "Session",
+                      "Caches opened workbooks for repeated probes; entries expire "
+                      "when the file's mtime or size changes.")
+      .def(py::init<size_t>(), py::arg("capacity") = 8)
+      .def("info", &Session::info, py::arg("file"), py::arg("format") = "",
+           py::arg("max_bytes") = 0)
+      .def("schema", &Session::schema, py::arg("file"), py::arg("sheet") = py::none(),
+           py::arg("header_row") = py::int_(1), py::arg("format") = "",
+           py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
+           py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
+           py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
+           py::arg("max_bytes") = 0)
+      .def("probe", &Session::probe, py::arg("file"), py::arg("sheet") = py::none(),
+           py::arg("header_row") = py::int_(1), py::arg("format") = "",
+           py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
+           py::arg("max_rows") = 0, py::arg("sample") = 5, py::arg("top") = 5,
+           py::arg("distinct_cap") = 10000, py::arg("jobs") = 0, py::arg("regions") = false,
+           py::arg("max_bytes") = 0)
+      .def("search", &Session::search, py::arg("file"), py::arg("query"),
+           py::arg("regex") = false, py::arg("ignore_case") = true, py::arg("context") = 1,
+           py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
+           py::arg("sheet") = py::none(), py::arg("format") = "", py::arg("max_bytes") = 0)
+      .def("read_rows", &Session::read_rows, py::arg("file"), py::arg("sheet") = py::none(),
+           py::arg("header_row") = py::int_(1), py::arg("format") = "",
+           py::arg("limit") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
+           py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
+           py::arg("max_columns") = 16384, py::arg("with_cells") = false,
+           py::arg("max_bytes") = 0)
+      .def("preview", &Session::preview, py::arg("file"), py::arg("sheet") = py::none(),
+           py::arg("header_row") = py::int_(1), py::arg("format") = "",
+           py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
+           py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
+           py::arg("max_columns") = 16384, py::arg("with_cells") = false,
+           py::arg("max_bytes") = 0)
+      .def("clear", &Session::clear, "Drop every cached workbook.")
+      .def("stats", &Session::stats, "Cache size, capacity, hits and misses.")
+      .def_property_readonly("capacity", &Session::capacity)
+      .def("__len__", &Session::size)
+      .def("__enter__", [](py::object self) { return self; })
+      .def("__exit__",
+           [](py::object, const py::object&, const py::object&, const py::object&) {});
 }
