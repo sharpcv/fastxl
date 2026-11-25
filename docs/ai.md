@@ -136,8 +136,9 @@ A formula cell with no cached value (`<f>...</f><v/>`, common in files written
 by openpyxl or ETL tools) is reported as a `null` cell with the `has_formula`
 flag and `has_formulas: true`, counted in `uncached_formulas`, and previewed with
 `needs_recalc: true`, so it is visible to probes instead of silently
-disappearing. `convert` still drops the formula itself (values only), but the
-workbook summary counts it.
+disappearing. `convert` preserves the formula text for xlsx-to-xlsx output
+(including shared-formula followers); table conversions stay values-only. The
+workbook summary still counts uncached formulas.
 
 Sheet-level anchors come from real OOXML parts: `tables` from
 `xl/tables/table*.xml` (structured table boundaries and column names),
@@ -168,6 +169,15 @@ not match. Hits carry `sheet`, `ref`, `row`, `col`, `type`, `field`
 `--regex` switches to ECMAScript patterns; `--context 0` enables the low-cost
 keyword channel, which skips rendering numeric/date cells unless the query parses
 as a number.
+
+Excel's shared formulas (`<f t="shared" si=...>`) are resolved: every follower
+cell carries the master formula rewritten for its own relative references, so
+`formula_cells`, `formula_links`, `preview` and `search --field formula` see the
+whole range instead of just the master cell. Absolute parts (`$A$1`) are kept,
+and function names, sheet names, string literals and structured references are
+copied verbatim. Styles expressed through the workbook theme
+(`<color theme="4" tint="0.4"/>`) are resolved against `xl/theme/theme1.xml`, so
+`font_color`/`fill_color` report concrete `#RRGGBB` values rather than nothing.
 
 `type` is one of `null`, `integer`, `number`, `text`, `boolean`, `error`,
 `date`, `datetime`, `time`, `mixed`, `invalid`. `integer` means every numeric
@@ -266,9 +276,24 @@ with fastxl.Session(capacity=8) as session:
     print(session.stats())   # {'size': 1, 'capacity': 8, 'hits': 1, 'misses': 1}
 ```
 
-`Session` covers `info`/`schema`/`probe`/`search` (workbook-level parsing);
-`preview`/`read_rows` delegate to the streaming readers, which own their
-decompression stream.
+`Session` covers `info`/`schema`/`probe`/`search` and `preview_sheet`
+(workbook-level parsing); `preview`/`read_rows` delegate to the streaming
+readers, which own their decompression stream.
+
+`preview_sheet()` returns the sheet-preview contract (used range, resolved header
+row, merged cells, comments, tables, pivots, charts) that the CLI `preview`
+command emits, for xlsx only:
+
+```python
+page = fastxl.preview_sheet("book.xlsx", sheet="Data", range="A1:F40",
+                            max_cell_bytes=256, max_bytes=4000)
+page["used_range"], page["header_row"], page["rows"][0]["cells"][0]["ref"]
+```
+
+On Windows a resident `Session` opens workbooks without `mmap`
+(`memory_map=False` by default there) so Excel can still save-replace the file;
+pass `memory_map=True/False` to override. `fastxl.Error` carries both `.code` and
+the documented `.exit_code` (2 input, 3 output, 4 internal).
 
 The package ships PEP 561 type information (`_fastxl.pyi` plus `py.typed`); the
 repository's `pyrightconfig.json` type-checks the skill and stubs with zero
@@ -293,12 +318,20 @@ FASTXL_FORCE_CLI=1 python projects/tools/fastxl_mcp.py
 ```
 
 Tools: `fastxl_info`, `fastxl_preview`, `fastxl_schema`, `fastxl_probe`,
-`fastxl_search`. Every tool accepts `max_bytes`, and `initialize` reports the
-active backend in `serverInfo.mode` (`native` or `cli`). Tool results are the
-same JSON objects documented here, with one exception: `fastxl_preview` always
-uses the CLI, because its payload (used range, header row, merge metadata)
-follows the preview contract rather than the native row-reader contract. CLI and
-native failures both become `isError: true` with the structured error text.
+`fastxl_search`. All five run natively for xlsx (non-xlsx previews fall back to
+the CLI because the native sheet preview is xlsx-only), and every tool accepts
+`max_bytes`. Tool schemas also expose `regions` (schema/probe) and
+`max_cell_bytes` (preview/search); `initialize` reports the active backend in
+`serverInfo.mode` (`native` or `cli`).
+
+Deterministic input errors (`FileNotFound`, `InvalidSheetRef`, ...) are returned
+directly as the structured error contract instead of being retried through the
+CLI:
+
+```json
+{"version":1,"ok":false,"error":{"code":"FileNotFound","message":"...",
+ "exit_code":2,"command":"info","file":"nope.xlsx"}}
+```
 
 ## Reading values as text
 

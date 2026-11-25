@@ -1420,6 +1420,14 @@ private:
   std::condition_variable not_full_;
 };
 
+// A shared formula is resolved from a master cell earlier in the sheet, so the
+// disjoint row fragments used by parallel profiling cannot always see it. Such
+// sheets fall back to one sequential pass.
+bool contains_shared_formula(std::string_view xml) {
+  return xml.find("t=\"shared\"") != std::string_view::npos ||
+         xml.find("t='shared'") != std::string_view::npos;
+}
+
 bool try_profile_streamed(const WorkBook& workbook, size_t sheet, const ProfileOptions& options,
                           unsigned jobs, SheetProfile* profile) {
   const WorkSheet& info = detail::WorkbookAccessor::sheet(workbook, sheet);
@@ -1476,6 +1484,7 @@ bool try_profile_streamed(const WorkBook& workbook, size_t sheet, const ProfileO
   std::vector<char> chunk(kStreamChunkBytes);
   uint32_t next_row = 1;
   bool producer_failed = false;
+  bool saw_shared_formula = false;
   try {
     for (;;) {
       const size_t got = stream->read(chunk.data(), chunk.size());
@@ -1502,9 +1511,13 @@ bool try_profile_streamed(const WorkBook& workbook, size_t sheet, const ProfileO
           ProfileSheetAdapter adapter(sink);
           parse_sheet_fragment(fragment, info, styles, shared, open_options.lenient,
                                detail::WorkbookAccessor::date_1904(workbook), number, adapter);
-        } else if (!queue.push(std::string(fragment), number)) {
-          producer_failed = true;
-          break;
+        } else {
+          if (!saw_shared_formula && contains_shared_formula(fragment))
+            saw_shared_formula = true;
+          if (!queue.push(std::string(fragment), number)) {
+            producer_failed = true;
+            break;
+          }
         }
         pos = scan.end;
       }
@@ -1535,6 +1548,8 @@ bool try_profile_streamed(const WorkBook& workbook, size_t sheet, const ProfileO
   queue.close();
   for (auto& worker : workers) worker.join();
   if (std::exception_ptr error = queue.error()) std::rethrow_exception(error);
+  // Shared formulas need one sequential pass over the whole sheet.
+  if (saw_shared_formula) return false;
 
   {
     ValidationSink validation_sink(&base);
@@ -1561,6 +1576,7 @@ bool try_parallel_profile(const WorkBook& workbook, size_t sheet, const ProfileO
                           unsigned jobs, SheetProfile* profile) {
   const WorkSheet& info = detail::WorkbookAccessor::sheet(workbook, sheet);
   std::string xml = detail::WorkbookAccessor::read_part(workbook, info.part_name());
+  if (contains_shared_formula(xml)) return false;
   std::vector<RowSpan> rows = scan_rows(xml);
   if (rows.empty()) return false;
 

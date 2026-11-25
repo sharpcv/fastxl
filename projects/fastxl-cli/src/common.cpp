@@ -86,20 +86,7 @@ Format resolve_format(const std::string& explicit_value, const std::string& path
   return format;
 }
 
-int exit_code_for(ErrorCode code) {
-  switch (code) {
-  case ErrorCode::IoError:
-  case ErrorCode::AtomicReplaceFailed: return 3;
-  case ErrorCode::Internal:
-  case ErrorCode::Closed:
-  case ErrorCode::CellOrderViolation:
-  case ErrorCode::SheetOrderViolation:
-  case ErrorCode::WorkbookAlreadyStarted:
-  case ErrorCode::Aborted:
-  case ErrorCode::Count: return 4;
-  default: return 2;
-  }
-}
+int exit_code_for(ErrorCode code) { return fastxl::exit_code(code); }
 
 std::string_view exit_code_name(int code) {
   switch (code) {

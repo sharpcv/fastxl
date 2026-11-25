@@ -1,9 +1,12 @@
 #include "sheet_parser.hpp"
 
+#include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "excel_escape.hpp"
+#include "formula.hpp"
 #include "fastxl/datetime.hpp"
 #include "fastxl/error.hpp"
 #include "number.hpp"
@@ -472,10 +475,28 @@ private:
       if (cursor.self_closing()) pop();
       return;
 
-    case Tag::Formula:
+    case Tag::Formula: {
+      formula_shared_ = cursor.attr_raw("t") == "shared";
+      formula_shared_si_.clear();
+      if (formula_shared_) {
+        std::string_view si = cursor.attr_raw("si");
+        formula_shared_si_.assign(si.data(), si.size());
+      }
+      if (cursor.self_closing() && formula_shared_ && !formula_shared_si_.empty()) {
+        // Follower of a shared formula: rewrite the master for this cell.
+        auto master = shared_formulas_.find(formula_shared_si_);
+        if (master != shared_formulas_.end()) {
+          formula_text_ = fastxl::translate_shared_formula(
+              master->second.text,
+              static_cast<int32_t>(cell_row_) - static_cast<int32_t>(master->second.row),
+              static_cast<int32_t>(cell_col_) - static_cast<int32_t>(master->second.col));
+          has_formula_ = true;
+        }
+      }
       push(Tag::Formula);
       if (cursor.self_closing()) pop();
       return;
+    }
 
     case Tag::Text:
       push(Tag::Text);
@@ -504,6 +525,8 @@ private:
     value_text_.clear();
     formula_text_.clear();
     inline_text_.clear();
+    formula_shared_ = false;
+    formula_shared_si_.clear();
 
     std::string_view type = cursor.attr_raw("t");
     if (type.empty() || type == "n") raw_type_ = RawType::Number;
@@ -645,6 +668,15 @@ private:
   void finish_cell() {
     if (!has_cell_) return;
     has_cell_ = false;
+    if (formula_shared_ && !formula_shared_si_.empty() && !formula_text_.empty()) {
+      // Master of a shared formula (`<f t="shared" ref="C2:C9" si="0">...`).
+      if (shared_formulas_.size() < kMaxSharedFormulas) {
+        SharedFormula& slot = shared_formulas_[formula_shared_si_];
+        slot.row = cell_row_;
+        slot.col = cell_col_;
+        slot.text.assign(formula_text_.data(), formula_text_.size());
+      }
+    }
     if (!has_value_ && !has_inline_) {
       if (!has_formula_) return; // truly empty cell
       // Formula without a cached value: emit a Null cell that still carries
@@ -824,6 +856,17 @@ private:
   std::vector<std::string> filter_values_custom_;
   std::string validation_type_;
   std::string validation_sqref_;
+  struct SharedFormula {
+    uint32_t row = 0;
+    uint32_t col = 0;
+    std::string text;
+  };
+
+  static constexpr size_t kMaxSharedFormulas = 64;
+  std::map<std::string, SharedFormula> shared_formulas_;
+  bool formula_shared_ = false;
+  std::string formula_shared_si_;
+
   std::string validation_formula1_;
   std::string validation_formula2_;
   bool fragment_ = false;

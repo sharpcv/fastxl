@@ -76,11 +76,11 @@ def load_native():
 NATIVE = load_native()
 SESSION = NATIVE.Session() if NATIVE is not None else None
 
-# fastxl_preview stays on the CLI: its payload is the sheet preview (used range,
-# header row, merged cells), while the native row reader exposes a different
-# contract. The other four probe the workbook and reuse the Session cache.
+# Every tool is native when the module is available; the CLI covers non-xlsx
+# previews (the native sheet preview is xlsx-only) and unavailable modules.
 NATIVE_METHODS = {
     "fastxl_info": "info",
+    "fastxl_preview": "preview_sheet",
     "fastxl_schema": "schema",
     "fastxl_probe": "probe",
     "fastxl_search": "search",
@@ -90,6 +90,15 @@ NATIVE_METHODS = {
 # projections) needs the CLI, which has the richer argument surface.
 NATIVE_OPTIONS = {
     "info": {"format", "max_bytes"},
+    "preview": {
+        "sheet",
+        "header_row",
+        "rows",
+        "range",
+        "columns",
+        "max_cell_bytes",
+        "max_bytes",
+    },
     "schema": {
         "sheet",
         "header_row",
@@ -125,6 +134,31 @@ NATIVE_OPTIONS = {
 }
 
 
+class NativeError(Exception):
+    """A deterministic native failure; the CLI would fail the same way."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.text = text
+
+
+def error_payload(command, arguments, error):
+    """The structured error contract, as the CLI would emit it."""
+    payload = {
+        "version": 1,
+        "ok": False,
+        "error": {
+            "code": getattr(error, "code", "Internal"),
+            "message": str(error),
+            "exit_code": getattr(error, "exit_code", 4),
+            "command": command,
+        },
+    }
+    if isinstance(arguments.get("file"), str):
+        payload["error"]["file"] = arguments["file"]
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def native_call(name, arguments):
     """Returns the JSON text of a native answer, or None when the CLI is needed."""
     if SESSION is None:
@@ -132,7 +166,12 @@ def native_call(name, arguments):
     method = NATIVE_METHODS.get(name)
     if method is None:
         return None
-    options = NATIVE_OPTIONS[method]
+    if name == "fastxl_preview" and not str(arguments.get("file", "")).lower().endswith(
+        (".xlsx", ".xlsm")
+    ):
+        # The native sheet preview is xlsx-only; csv/jsonl previews use the CLI.
+        return None
+    options = NATIVE_OPTIONS[name[len("fastxl_"):]]
     kwargs = {}
     for key, value in arguments.items():
         if key == "file" or value is None:
@@ -142,7 +181,11 @@ def native_call(name, arguments):
         kwargs[key] = value
     try:
         payload = getattr(SESSION, method)(str(arguments["file"]), **kwargs)
-    except Exception as error:  # fall back to the CLI for its error rendering
+    except NATIVE.Error as error:
+        # FileNotFound, InvalidSheetRef, ... would fail identically in the CLI,
+        # so return the contract directly instead of spawning a second process.
+        raise NativeError(error_payload(method, arguments, error)) from error
+    except Exception as error:  # unexpected: fall back to the CLI for its rendering
         print("native %s failed: %s" % (method, error), file=sys.stderr)
         return None
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -165,14 +208,12 @@ def common_args(arguments, command):
     args += header_args(arguments.get("header_row"))
     if arguments.get("max_rows") is not None:
         args += ["--max-rows", str(arguments["max_rows"])]
-    if command == "probe":
+    if command in ("probe", "schema"):
         for option in ("sample", "top", "distinct_cap", "jobs"):
             if arguments.get(option) is not None:
                 args += ["--" + option.replace("_", "-"), str(arguments[option])]
-    if command == "schema":
-        for option in ("sample", "top", "distinct_cap", "jobs"):
-            if arguments.get(option) is not None:
-                args += ["--" + option.replace("_", "-"), str(arguments[option])]
+        if arguments.get("regions"):
+            args.append("--regions")
     if command == "preview":
         for option in ("rows", "range", "columns", "max_cell_bytes"):
             if arguments.get(option) is not None:
@@ -247,6 +288,11 @@ TOOL_SCHEMAS = {
                 "top": {"type": "integer", "minimum": 0, "maximum": 1000},
                 "distinct_cap": {"type": "integer", "minimum": 0},
                 "jobs": {"type": "integer", "minimum": 0, "maximum": 1024},
+                "regions": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Split each sheet into data islands and profile them",
+                },
                 "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file"],
@@ -268,6 +314,11 @@ TOOL_SCHEMAS = {
                 "top": {"type": "integer", "minimum": 0, "maximum": 1000},
                 "distinct_cap": {"type": "integer", "minimum": 0},
                 "jobs": {"type": "integer", "minimum": 0, "maximum": 1024},
+                "regions": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Split each sheet into data islands and profile them",
+                },
                 "max_bytes": {"type": "integer", "minimum": 0},
             },
             "required": ["file"],
@@ -285,6 +336,7 @@ TOOL_SCHEMAS = {
                 "ignore_case": {"type": "boolean", "default": True},
                 "context": {"type": "integer", "minimum": 0, "maximum": 10},
                 "max_hits": {"type": "integer", "minimum": 0, "maximum": 1000000},
+                "max_cell_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
                 "sheet": {"type": ["string", "integer"]},
                 "max_bytes": {"type": "integer", "minimum": 0},
             },
@@ -318,7 +370,10 @@ def cli_call(cli, name, arguments):
 def call_tool(cli, name, arguments):
     if name not in TOOL_SCHEMAS:
         return None, "unknown tool: " + name
-    text = native_call(name, arguments)
+    try:
+        text = native_call(name, arguments)
+    except NativeError as error:
+        return None, error.text
     if text is not None:
         return text, None
     return cli_call(cli, name, arguments)

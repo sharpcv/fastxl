@@ -73,6 +73,11 @@ bytes, long paths and streamed xlsx.
 
 ## CSV
 
+- Input is UTF-8 only. A UTF-8 BOM is accepted and stripped; GBK/GB18030 or
+  other legacy encodings are rejected with an error that names the encoding, so
+  the fix is to re-save the file as UTF-8 rather than to retry.
+
+
 - One delimiter only; no custom quote/escape characters, no comment lines.
 - UTF-8 only. A BOM is skipped. Invalid UTF-8 in a header or data field is
   rejected with `InvalidUtf8` and the record/field number; it is never passed
@@ -189,12 +194,27 @@ bytes, long paths and streamed xlsx.
 - **Text length**: 32,767 UTF-16 code units is enforced for xlsx cells only;
   CSV/JSONL do not enforce the Excel limit.
 
+## Styles and formulas
+
+- Theme colors are resolved against `xl/theme/theme1.xml` (theme index + tint),
+  including the tinted Office palette. Indexed colors (`indexed="N"`) are not
+  mapped to the legacy palette: only `rgb` and `theme` become concrete colors.
+- Shared formulas (`t="shared"`) are resolved for masters and followers in the
+  same sheet by rewriting relative A1 references. Array formulas
+  (`t="array"`) are not expanded; only the master's formula text is kept.
+- Parallel profiling falls back to a single sequential pass on sheets that use
+  shared formulas, because a follower can live in a different row fragment than
+  its master. This is a throughput, not a correctness, trade-off.
+
 ## Python and MCP
 
 - `fastxl.Session` caches the parsed workbook (OPC parts, shared strings,
   styles), not row data: `preview`/`read_rows` still stream the sheet on every
   call, and `schema`/`probe` still scan every row. Expect the Session to help
   most with repeated `info`/`search` calls, least with full profiling.
+- On Windows a resident `Session` opens workbooks without `mmap` by default so
+  Excel can still save-replace the file; `Session(memory_map=True)` opts back in
+  at the cost of possibly blocking that save while the cache holds it.
 - Session entries are invalidated by `(mtime, size)`; a rewrite that preserves
   both (rare, e.g. same-size in-place edit within the timestamp granularity) is
   not detected. Use `session.clear()` when in doubt.
@@ -218,10 +238,10 @@ bytes, long paths and streamed xlsx.
   `within_budget: false` means even the last stage could not meet the cap. Never
   parse a budgeted payload as if it were complete.
 - The MCP server (`projects/tools/fastxl_mcp.py`) is read-only. It prefers the
-  native module through one cached `fastxl.Session` and falls back to
-  `fastxl-cli` when the module is unavailable or `FASTXL_FORCE_CLI=1` /
-  `--cli-only` is set; `fastxl_preview` always uses the CLI because its payload
-  is the sheet-preview contract, not the row-reader contract. The CLI JSON
+  native module through one cached `fastxl.Session` and uses `preview_sheet` for
+  xlsx previews, so the sheet-preview payload also comes from the cache. The CLI
+  is the fallback when the module is unavailable, `FASTXL_FORCE_CLI=1` /
+  `--cli-only` is set, or a CSV/JSONL preview is requested. The CLI JSON
   contract and machine-readable schema are in `docs/ai.md` and
   `docs/probe.schema.json`.
 - No progress reporting or cancellation for long conversions.

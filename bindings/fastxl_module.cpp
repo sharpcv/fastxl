@@ -8,8 +8,9 @@
 
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
-#include "json_budget.hpp"
+#include "fastxl/detail/json_budget.hpp"
 #include "metadata_json.hpp"
+#include "preview_json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -189,7 +190,7 @@ Json py_to_json(py::handle value) {
 
 // Native results carry the same `budget` object as the CLI JSONL contract.
 py::dict json_result(Json& root, size_t max_bytes) {
-  fastxl_cli::apply_output_budget(root, max_bytes);
+  fastxl::detail::apply_output_budget(root, max_bytes);
   return json_to_py(root).cast<py::dict>();
 }
 
@@ -198,7 +199,7 @@ py::dict json_result(Json& root, size_t max_bytes) {
 py::dict budget_dict(py::dict root, size_t max_bytes) {
   if (max_bytes == 0) return root;
   Json json = py_to_json(root);
-  fastxl_cli::apply_output_budget(json, max_bytes);
+  fastxl::detail::apply_output_budget(json, max_bytes);
   return json_to_py(json).cast<py::dict>();
 }
 
@@ -1033,6 +1034,48 @@ py::dict search(const std::string& file, const std::string& query, bool regex,
   return json_result(root, max_bytes);
 }
 
+// The CLI `preview` payload (used range, header row, metadata) for one sheet.
+Json preview_sheet_json(const WorkBook& workbook, const std::string& file,
+                        const std::string& sheet, py::object header_row, size_t rows,
+                        const std::string& range, const std::string& columns,
+                        size_t max_cell_bytes) {
+  bool header_auto = false;
+  uint32_t header_row_number = 1;
+  if (py::isinstance<py::str>(header_row)) {
+    const std::string text = py::cast<std::string>(header_row);
+    if (text != "auto")
+      throw Exception(ErrorCode::InvalidValue, "header_row must be an integer, 0 or 'auto'");
+    header_auto = true;
+  } else {
+    header_row_number = py::cast<uint32_t>(header_row);
+  }
+  fastxl_cli::SheetRange sheet_range;
+  std::vector<uint8_t> wanted;
+  try {
+    sheet_range = fastxl_cli::preview_range(range,
+                                           static_cast<uint32_t>(rows == 0 ? 1048576 : rows));
+    wanted = fastxl_cli::preview_wanted_columns(sheet_range, columns);
+  } catch (const std::exception& error) {
+    throw Exception(ErrorCode::InvalidValue, error.what());
+  }
+  const size_t index = resolve_sheet_index(workbook, sheet);
+  return fastxl_cli::build_xlsx_preview(workbook, index, file, sheet_range, wanted,
+                                       max_cell_bytes, header_auto, header_row_number);
+}
+
+py::dict preview_sheet(const std::string& file, py::object sheet, py::object header_row,
+                       const std::string& format, size_t rows, const std::string& range,
+                       const std::string& columns, size_t max_cell_bytes, size_t max_bytes) {
+  const Format resolved = resolve_format(file, format);
+  if (resolved != Format::Xlsx)
+    throw Exception(ErrorCode::UnsupportedFormat,
+                    "preview_sheet supports xlsx workbooks; use preview() for csv/jsonl");
+  WorkBook workbook = WorkBook::open(utf8_path(file));
+  Json root = preview_sheet_json(workbook, file, sheet_selector(sheet), std::move(header_row),
+                                 rows, range, columns, max_cell_bytes);
+  return json_result(root, max_bytes);
+}
+
 py::dict preview(const std::string& file, py::object sheet, py::object header_row,
                  const std::string& format, size_t rows, size_t offset, bool as_dicts,
                  bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
@@ -1147,7 +1190,12 @@ size_t write_xlsx(const std::string& file, py::object rows, py::object columns,
 // capacity (8 by default).
 class Session {
 public:
-  explicit Session(size_t capacity = 8) : capacity_(capacity == 0 ? 8 : capacity) {}
+  // `memory_map` defaults to off on Windows: a resident workbook keeps the
+  // mapping alive, which makes Excel's save-replace of the same file fail.
+  Session(size_t capacity, py::object memory_map)
+      : capacity_(capacity == 0 ? 8 : capacity),
+        memory_map_(memory_map.is_none() ? default_memory_map()
+                                         : py::cast<bool>(memory_map)) {}
 
   py::dict info(const std::string& file, const std::string& format, size_t max_bytes) {
     const Format resolved = resolve_format(file, format);
@@ -1190,6 +1238,18 @@ public:
     return json_result(root, max_bytes);
   }
 
+  py::dict preview_sheet(const std::string& file, py::object sheet, py::object header_row,
+                         const std::string& format, size_t rows, const std::string& range,
+                         const std::string& columns, size_t max_cell_bytes, size_t max_bytes) {
+    const WorkBook* cached = cached_if_xlsx(file, format);
+    if (cached == nullptr)
+      throw Exception(ErrorCode::UnsupportedFormat,
+                      "preview_sheet supports xlsx workbooks; use preview() for csv/jsonl");
+    Json root = preview_sheet_json(*cached, file, sheet_selector(sheet), std::move(header_row),
+                                   rows, range, columns, max_cell_bytes);
+    return json_result(root, max_bytes);
+  }
+
   // Row streaming cannot reuse a workbook: the reader owns the decompression
   // stream. These delegate to the module-level functions.
   py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
@@ -1224,6 +1284,15 @@ public:
 
   size_t capacity() const noexcept { return capacity_; }
   size_t size() const noexcept { return entries_.size(); }
+  bool memory_map() const noexcept { return memory_map_; }
+
+  static bool default_memory_map() noexcept {
+#ifdef _WIN32
+    return false;
+#else
+    return true;
+#endif
+  }
 
 private:
   struct Entry {
@@ -1264,7 +1333,9 @@ private:
       entries_.erase(found);
     }
     // Open first so a failure leaves the cache untouched.
-    std::unique_ptr<WorkBook> book = std::make_unique<WorkBook>(WorkBook::open(path));
+    OpenOptions options;
+    options.memory_map = memory_map_;
+    std::unique_ptr<WorkBook> book = std::make_unique<WorkBook>(WorkBook::open(path, options));
     while (entries_.size() >= capacity_ && !order_.empty()) {
       entries_.erase(order_.back());
       order_.pop_back();
@@ -1282,6 +1353,7 @@ private:
   std::list<std::string> order_;
   std::unordered_map<std::string, Entry> entries_;
   size_t capacity_ = 8;
+  bool memory_map_ = true;
   uint64_t hits_ = 0;
   uint64_t misses_ = 0;
 };
@@ -1298,6 +1370,8 @@ void translate_fastxl_error(std::exception_ptr p) {
     if (!instance) return;
     py::object name = py::str(code.data(), code.size());
     PyObject_SetAttrString(instance.ptr(), "code", name.ptr());
+    py::object exit_code = py::int_(fastxl::exit_code(e.code()));
+    PyObject_SetAttrString(instance.ptr(), "exit_code", exit_code.ptr());
     PyErr_SetObject(error_type, instance.ptr());
   }
 }
@@ -1342,6 +1416,12 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
         py::arg("sheet") = py::none(), py::arg("format") = "", py::arg("max_bytes") = 0,
         "Keyword/regex search with A1 hits and context windows.");
+  m.def("preview_sheet", &preview_sheet, py::arg("file"), py::arg("sheet") = py::none(),
+        py::arg("header_row") = py::int_(1), py::arg("format") = "", py::arg("rows") = 20,
+        py::arg("range") = "", py::arg("columns") = "", py::arg("max_cell_bytes") = 256,
+        py::arg("max_bytes") = 0,
+        "The CLI preview contract for one xlsx sheet: used range, header row, "
+        "merged cells, comments, tables, pivots, charts.");
   m.def("preview", &preview, py::arg("file"), py::arg("sheet") = py::none(),
         py::arg("header_row") = py::int_(1), py::arg("format") = "",
         py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
@@ -1358,7 +1438,10 @@ PYBIND11_MODULE(_fastxl, m) {
   py::class_<Session>(m, "Session",
                       "Caches opened workbooks for repeated probes; entries expire "
                       "when the file's mtime or size changes.")
-      .def(py::init<size_t>(), py::arg("capacity") = 8)
+      .def(py::init<size_t, py::object>(), py::arg("capacity") = 8,
+           py::arg("memory_map") = py::none(),
+           "capacity = workbook cache size; memory_map = None (platform default: "
+           "off on Windows, on elsewhere), True or False.")
       .def("info", &Session::info, py::arg("file"), py::arg("format") = "",
            py::arg("max_bytes") = 0)
       .def("schema", &Session::schema, py::arg("file"), py::arg("sheet") = py::none(),
@@ -1383,6 +1466,10 @@ PYBIND11_MODULE(_fastxl, m) {
            py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
            py::arg("max_columns") = 16384, py::arg("with_cells") = false,
            py::arg("max_bytes") = 0)
+      .def("preview_sheet", &Session::preview_sheet, py::arg("file"),
+           py::arg("sheet") = py::none(), py::arg("header_row") = py::int_(1),
+           py::arg("format") = "", py::arg("rows") = 20, py::arg("range") = "",
+           py::arg("columns") = "", py::arg("max_cell_bytes") = 256, py::arg("max_bytes") = 0)
       .def("preview", &Session::preview, py::arg("file"), py::arg("sheet") = py::none(),
            py::arg("header_row") = py::int_(1), py::arg("format") = "",
            py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
@@ -1392,6 +1479,7 @@ PYBIND11_MODULE(_fastxl, m) {
       .def("clear", &Session::clear, "Drop every cached workbook.")
       .def("stats", &Session::stats, "Cache size, capacity, hits and misses.")
       .def_property_readonly("capacity", &Session::capacity)
+      .def_property_readonly("memory_map", &Session::memory_map)
       .def("__len__", &Session::size)
       .def("__enter__", [](py::object self) { return self; })
       .def("__exit__",

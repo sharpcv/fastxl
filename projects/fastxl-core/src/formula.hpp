@@ -15,4 +15,11 @@ namespace fastxl {
 std::vector<FormulaRef> parse_formula_refs(std::string_view formula,
                                            std::string_view current_sheet);
 
+// Rewrites the relative A1 references of a shared-formula master for a follower
+// cell `row_offset`/`col_offset` away. Absolute parts ($A$1) stay put; function
+// names, sheet names, string literals and structured references are copied
+// verbatim.
+std::string translate_shared_formula(std::string_view formula, int32_t row_offset,
+                                     int32_t col_offset);
+
 } // namespace fastxl

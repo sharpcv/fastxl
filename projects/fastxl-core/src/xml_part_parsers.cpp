@@ -1,5 +1,7 @@
 #include "xml_part_parsers.hpp"
 
+#include <cmath>
+
 #include <algorithm>
 #include <cctype>
 
@@ -240,7 +242,126 @@ FormatKind classify_format_code(std::string_view code) {
   return FormatKind::General;
 }
 
-StylesheetData parse_stylesheet(std::string_view xml) {
+namespace {
+
+void rgb_to_hsl(double r, double g, double b, double* h, double* s, double* l) noexcept {
+  const double max = std::max({r, g, b});
+  const double min = std::min({r, g, b});
+  *l = (max + min) / 2.0;
+  if (max == min) {
+    *h = 0.0;
+    *s = 0.0;
+    return;
+  }
+  const double delta = max - min;
+  *s = *l > 0.5 ? delta / (2.0 - max - min) : delta / (max + min);
+  if (max == r) {
+    *h = (g - b) / delta + (g < b ? 6.0 : 0.0);
+  } else if (max == g) {
+    *h = (b - r) / delta + 2.0;
+  } else {
+    *h = (r - g) / delta + 4.0;
+  }
+  *h /= 6.0;
+}
+
+double hue_channel(double p, double q, double t) noexcept {
+  if (t < 0.0) t += 1.0;
+  if (t > 1.0) t -= 1.0;
+  if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+  if (t < 1.0 / 2.0) return q;
+  if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+  return p;
+}
+
+uint32_t hsl_to_rgb(double h, double s, double l) noexcept {
+  if (s == 0.0) {
+    const auto gray = static_cast<uint32_t>(std::lround(l * 255.0));
+    return (gray << 16) | (gray << 8) | gray;
+  }
+  const double q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+  const double p = 2.0 * l - q;
+  const double r = hue_channel(p, q, h + 1.0 / 3.0);
+  const double g = hue_channel(p, q, h);
+  const double b = hue_channel(p, q, h - 1.0 / 3.0);
+  return (static_cast<uint32_t>(std::lround(r * 255.0)) << 16) |
+         (static_cast<uint32_t>(std::lround(g * 255.0)) << 8) |
+         static_cast<uint32_t>(std::lround(b * 255.0));
+}
+
+uint32_t apply_tint(uint32_t color, double tint) noexcept {
+  if (tint == 0.0) return color;
+  double h = 0.0;
+  double s = 0.0;
+  double l = 0.0;
+  rgb_to_hsl(((color >> 16) & 0xFF) / 255.0, ((color >> 8) & 0xFF) / 255.0,
+             (color & 0xFF) / 255.0, &h, &s, &l);
+  l = tint < 0.0 ? l * (1.0 + tint) : l * (1.0 - tint) + tint;
+  l = std::clamp(l, 0.0, 1.0);
+  return hsl_to_rgb(h, s, l);
+}
+
+bool attr_double(const XmlCursor& cursor, std::string_view name, double* out) noexcept {
+  std::string_view raw = cursor.attr_raw(name);
+  if (raw.empty()) return false;
+  char* end = nullptr;
+  const std::string text(raw);
+  const double value = std::strtod(text.c_str(), &end);
+  if (end == text.c_str() || *end != '\0') return false;
+  *out = value;
+  return true;
+}
+
+int theme_slot(std::string_view name) noexcept {
+  if (name == "lt1") return 0;
+  if (name == "dk1") return 1;
+  if (name == "lt2") return 2;
+  if (name == "dk2") return 3;
+  if (name == "accent1") return 4;
+  if (name == "accent2") return 5;
+  if (name == "accent3") return 6;
+  if (name == "accent4") return 7;
+  if (name == "accent5") return 8;
+  if (name == "accent6") return 9;
+  if (name == "hlink") return 10;
+  if (name == "folHlink") return 11;
+  return -1;
+}
+
+} // namespace
+
+uint32_t ThemePalette::resolve(uint32_t index, double tint) const noexcept {
+  if (index >= colors.size()) return 0;
+  return apply_tint(colors[index], tint);
+}
+
+ThemePalette parse_theme(std::string_view xml) {
+  ThemePalette palette;
+  XmlCursor cursor(xml);
+  cursor.set_context("xl/theme/theme1.xml");
+  int slot = -1;
+  while (cursor.next()) {
+    if (cursor.is_end_tag()) continue;
+    if (!cursor.is_tag()) continue;
+    const int named = theme_slot(cursor.tag_name());
+    if (named >= 0) {
+      slot = named;
+      palette.present = true;
+      continue;
+    }
+    if (slot < 0) continue;
+    if (cursor.tag_is("srgbClr") || cursor.tag_is("sysClr")) {
+      uint32_t color = 0;
+      const std::string_view raw = cursor.tag_is("sysClr") ? cursor.attr_raw("lastClr")
+                                                           : cursor.attr_raw("val");
+      if (parse_rgb(raw, &color)) palette.colors[static_cast<size_t>(slot)] = color;
+      slot = -1;
+    }
+  }
+  return palette;
+}
+
+StylesheetData parse_stylesheet(std::string_view xml, const ThemePalette* theme) {
   StylesheetData data;
   FlatMap<uint32_t, std::string> custom_codes;
   std::vector<uint32_t> xf_num_fmt;
@@ -305,6 +426,14 @@ StylesheetData parse_stylesheet(std::string_view xml) {
         if (parse_rgb(cursor.attr_raw("rgb"), &color)) {
           fonts.back().has_color = true;
           fonts.back().color = color;
+        } else if (theme != nullptr) {
+          const uint32_t index = attr_uint_or(cursor, "theme", UINT32_MAX);
+          if (index != UINT32_MAX) {
+            double tint = 0.0;
+            attr_double(cursor, "tint", &tint);
+            fonts.back().has_color = true;
+            fonts.back().color = theme->resolve(index, tint);
+          }
         }
       }
       continue;
@@ -320,7 +449,16 @@ StylesheetData parse_stylesheet(std::string_view xml) {
             !(pattern.empty() || pattern == "none" || pattern == "gray125");
       } else if (in_fill && cursor.tag_is("fgColor") && fills.back().has_fill) {
         uint32_t color = 0;
-        if (parse_rgb(cursor.attr_raw("rgb"), &color)) fills.back().fill_color = color;
+        if (parse_rgb(cursor.attr_raw("rgb"), &color)) {
+          fills.back().fill_color = color;
+        } else if (theme != nullptr) {
+          const uint32_t index = attr_uint_or(cursor, "theme", UINT32_MAX);
+          if (index != UINT32_MAX) {
+            double tint = 0.0;
+            attr_double(cursor, "tint", &tint);
+            fills.back().fill_color = theme->resolve(index, tint);
+          }
+        }
       }
       continue;
     }

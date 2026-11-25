@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import csv as csvlib
+import hashlib
 import json
 import subprocess
 import sys
@@ -444,6 +445,71 @@ def unlimited_preview_rows(cli):
     return payload["rows"]
 
 
+def test_audit_fixes(cli, work_dir):
+    """Theme colors, shared formulas, convert formula pass-through, CSV encoding."""
+    themed = json.loads(
+        run_ok(cli, "preview", FIXTURES / "metadata.xlsx", "--sheet", "Themed", "--json").stdout
+    )
+    cells = {cell["ref"]: cell for row in themed["rows"] for cell in row["cells"]}
+    check(cells["A2"].get("font_color") == "#4472C4", "theme: accent1 font color")
+    check(cells["B3"].get("font_color") == "#2F5597", "theme: tinted font color")
+    check(cells["B4"].get("fill_color") == "#8FAADC", "theme: tinted fill color")
+
+    formulas = json.loads(run_ok(cli, "preview", FIXTURES / "formulas.xlsx", "--json").stdout)
+    by_ref = {cell["ref"]: cell for row in formulas["rows"] for cell in row["cells"]}
+    check(by_ref["B2"].get("formula") == "A2*2", "shared formula: master")
+    check(by_ref["B3"].get("formula") == "A3*2", "shared formula: relative shift")
+    check(by_ref["C3"].get("formula") == "SUM($A3:B3)", "shared formula: range shift")
+    check(by_ref["D3"].get("formula") == "$A3+A$2", "shared formula: absolute parts")
+    probe = json.loads(run_ok(cli, "probe", FIXTURES / "formulas.xlsx", "--json").stdout)
+    check(probe["columns"][1]["formula_cells"] == 3, "shared formula: column count")
+    hit = json.loads(run_ok(cli, "search", FIXTURES / "formulas.xlsx", "--query", "A3*2",
+                            "--json").stdout)
+    check(hit["matches"][0]["field"] == "formula", "shared formula: searchable")
+
+    # convert keeps formulas (and their exact text, including shared followers).
+    converted = work_dir / "converted.xlsx"
+    run_ok(cli, "convert", FIXTURES / "metadata.xlsx", "--out", converted)
+    preview = json.loads(run_ok(cli, "preview", converted, "--json").stdout)
+    kept = {cell["ref"]: cell.get("formula") for row in preview["rows"]
+            for cell in row["cells"] if cell.get("formula")}
+    check(kept.get("C6") == "SUM(C2:C4)", "convert: formula preserved")
+
+    # A GBK/GB18030 file is not silently mangled: the diagnostic names the encoding.
+    gbk = work_dir / "gbk.csv"
+    gbk.write_bytes("id,name\n1,\u5f20\u4e09\n".encode("gbk"))
+    result = run(cli, "probe", gbk, "--json")
+    check(result.returncode == 2, "csv gbk: exit code")
+    error = json.loads(result.stderr.decode("utf-8"))
+    check(error["error"]["code"] == "InvalidUtf8", "csv gbk: error code")
+    check("GBK" in error["error"]["message"], "csv gbk: names the encoding")
+
+
+def test_json_schema(cli):
+    """Validates real payloads against docs/probe.schema.json when jsonschema exists."""
+    try:
+        import jsonschema
+    except ImportError:
+        return
+    schema = json.loads((ROOT / "docs" / "probe.schema.json").read_text(encoding="utf-8"))
+    basic = FIXTURES / "basic.xlsx"
+    payloads = [
+        json.loads(run_ok(cli, "info", basic, "--json").stdout),
+        json.loads(run_ok(cli, "preview", basic, "--json").stdout),
+        json.loads(run_ok(cli, "schema", basic, "--json").stdout),
+        json.loads(run_ok(cli, "probe", basic, "--json").stdout),
+        json.loads(run_ok(cli, "search", basic, "--query", "a", "--json").stdout),
+        json.loads(run_ok(cli, "probe", basic, "--json", "--max-bytes", "2000").stdout),
+        json.loads(run_ok(cli, "errors", "--json").stdout),
+        json.loads(run(cli, "probe", FIXTURES / "bad.csv", "--json").stderr.decode("utf-8")),
+    ]
+    for index, payload in enumerate(payloads):
+        try:
+            jsonschema.validate(payload, schema)
+        except jsonschema.ValidationError as error:
+            check(False, "schema: payload %d invalid: %s" % (index, error.message[:160]))
+
+
 def test_exit_codes(cli):
     bare = run(cli)
     check(bare.returncode == 0, "cli: no arguments exit code")
@@ -472,10 +538,12 @@ def test_exit_codes(cli):
 
 
 def ensure_fixtures():
-    """Regenerates the feature fixtures when the checkout has none (CI)."""
-    if (FIXTURES / "metadata.xlsx").exists() and (FIXTURES / "large.xlsx").exists():
-        return
+    """Regenerates the fixtures when missing or built by an older generator."""
     generator = FIXTURES / "gen_fixtures.py"
+    marker = FIXTURES / "VERSION"
+    expected = hashlib.sha256(generator.read_bytes()).hexdigest()[:16]
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == expected:
+        return
     subprocess.run([sys.executable, str(generator), "--out", str(FIXTURES)], check=True)
 
 
@@ -568,9 +636,11 @@ def main():
         test_preview(cli, work_dir)
         test_stdin_and_numbers(cli, work_dir)
         test_error_contract(cli, work_dir)
+        test_audit_fixes(cli, work_dir)
         test_mcp(cli)
     test_budget(cli)
     test_feature_fixtures(cli)
+    test_json_schema(cli)
     test_exit_codes(cli)
     test_help(cli)
 

@@ -26,6 +26,8 @@ using detail::ooxml::WorkbookMeta;
 using detail::ooxml::parse_relationships;
 using detail::ooxml::parse_shared_strings;
 using detail::ooxml::parse_stylesheet;
+using detail::ooxml::parse_theme;
+using detail::ooxml::ThemePalette;
 using detail::ooxml::parse_workbook_meta;
 using detail::ooxml::parse_table;
 using detail::ooxml::parse_comments;
@@ -638,8 +640,15 @@ WorkBook WorkBook::open(const std::filesystem::path& path, const OpenOptions& op
   }
   auto style = std::make_shared<detail::SheetStyleImpl>();
   if (!styles_part.empty()) {
+    ThemePalette theme;
+    if (const Relationship* rel = find_rel_type(rels, "/theme")) {
+      const std::string theme_part = resolve_part(workbook_dir, rel->target);
+      if (!theme_part.empty() && impl->archive.has(theme_part))
+        theme = parse_theme(impl->archive.read_all(theme_part, options.max_metadata_bytes));
+    }
     StylesheetData data = parse_stylesheet(
-        impl->archive.read_all(styles_part, options.max_metadata_bytes));
+        impl->archive.read_all(styles_part, options.max_metadata_bytes),
+        theme.present ? &theme : nullptr);
     style->codes = std::move(data.format_codes);
     style->kinds = std::move(data.kinds);
     style->flags = std::move(data.flags);

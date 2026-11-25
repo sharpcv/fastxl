@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -186,11 +187,13 @@ def session_checks(fastxl, work_dir):
 
 
 def ensure_fixtures():
-    """Regenerates the feature fixtures when the checkout has none (CI)."""
-    if (FIXTURES / "metadata.xlsx").exists() and (FIXTURES / "multi.xlsx").exists():
+    """Regenerates the fixtures when missing or built by an older generator."""
+    generator = FIXTURES / "gen_fixtures.py"
+    marker = FIXTURES / "VERSION"
+    expected = hashlib.sha256(generator.read_bytes()).hexdigest()[:16]
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == expected:
         return
-    subprocess.run([sys.executable, str(FIXTURES / "gen_fixtures.py"), "--out",
-                    str(FIXTURES)], check=True)
+    subprocess.run([sys.executable, str(generator), "--out", str(FIXTURES)], check=True)
 
 
 def feature_fixtures(fastxl):
@@ -235,6 +238,69 @@ def feature_fixtures(fastxl):
     check(len(budget["sheets"][0]["columns"]) < 40, "budget: columns removed")
 
 
+def audit_fixes(fastxl, cli, work_dir):
+    """preview_sheet, theme/shared-formula fidelity, Session memory_map, exit codes."""
+    basic = str(FIXTURES / "basic.xlsx")
+
+    # preview_sheet emits the CLI contract and stays byte-identical to it.
+    if cli is not None:
+        for kwargs in ({}, {"rows": 3}, {"header_row": "auto"}, {"range": "B2:E5"},
+                       {"columns": "1,3-4"}):
+            payload = fastxl.preview_sheet(basic, **kwargs)
+            args = [str(cli), "preview", basic, "--json"]
+            if "rows" in kwargs:
+                args += ["--rows", str(kwargs["rows"])]
+            if "header_row" in kwargs:
+                args += ["--header-row", str(kwargs["header_row"])]
+            if "range" in kwargs:
+                args += ["--range", kwargs["range"]]
+            if "columns" in kwargs:
+                args += ["--columns", kwargs["columns"]]
+            expected = json.loads(subprocess.run(args, capture_output=True).stdout)
+            check(payload == expected, "preview_sheet: parity %s" % (kwargs or "default"))
+
+    # Theme colors resolve through the palette, including tints.
+    themed = fastxl.preview_sheet(str(FIXTURES / "metadata.xlsx"), sheet="Themed")
+    cells = {cell["ref"]: cell for row in themed["rows"] for cell in row["cells"]}
+    check(cells["A2"].get("font_color") == "#4472C4", "preview_sheet: theme font")
+    check(cells["B3"].get("font_color") == "#2F5597", "preview_sheet: theme tinted font")
+    check(cells["B4"].get("fill_color") == "#8FAADC", "preview_sheet: theme tinted fill")
+
+    # Shared formulas are translated per row and stay searchable.
+    shared = fastxl.preview_sheet(str(FIXTURES / "formulas.xlsx"))
+    formulas = {cell["ref"]: cell.get("formula") for row in shared["rows"]
+                for cell in row["cells"] if cell.get("formula")}
+    check(formulas.get("B3") == "A3*2", "preview_sheet: shared formula")
+    check(formulas.get("C4") == "SUM($A4:B4)", "preview_sheet: shared range")
+    hit = fastxl.search(str(FIXTURES / "formulas.xlsx"), "A3*2")
+    check(hit["matches"][0]["field"] == "formula", "search: shared formula text")
+
+    # Session stores the preview cache and honours the memory_map policy.
+    session = fastxl.Session()
+    check(session.memory_map is True, "session: mmap default on Linux")
+    session.preview_sheet(basic)
+    session.preview_sheet(basic)
+    check(session.stats()["hits"] == 1, "session: preview_sheet reuses the workbook")
+    no_map = fastxl.Session(memory_map=False)
+    check(no_map.memory_map is False, "session: memory_map override")
+    check(no_map.info(basic)["ok"] is True, "session: works without mmap")
+
+    # Errors carry the documented exit code and reject non-xlsx previews.
+    try:
+        fastxl.preview_sheet(str(work_dir / "missing.xlsx"))
+    except fastxl.Error as error:
+        check(error.code == "FileNotFound", "preview_sheet: error code")
+        check(error.exit_code == 2, "preview_sheet: error exit code")
+    else:
+        check(False, "preview_sheet: missing file raises")
+    try:
+        fastxl.preview_sheet(str(FIXTURES / "basic.csv"))
+    except fastxl.Error as error:
+        check(error.code == "UnsupportedFormat", "preview_sheet: csv rejected")
+    else:
+        check(False, "preview_sheet: csv rejected")
+
+
 def cli_parity(fastxl, cli, work_dir):
     if cli is None:
         return
@@ -267,6 +333,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="fastxl-python-") as directory:
         session_checks(fastxl, Path(directory))
         cli_parity(fastxl, cli, Path(directory))
+        audit_fixes(fastxl, cli, Path(directory))
 
     if failures:
         for failure in failures:

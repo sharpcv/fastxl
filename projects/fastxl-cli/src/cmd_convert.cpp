@@ -57,6 +57,7 @@ public:
     current_row_ = row;
     cells_.clear();
     text_storage_.clear();
+    formula_storage_.clear();
     if (limit_ != 0 && data_rows_ >= limit_) return false;
     return true;
   }
@@ -73,6 +74,12 @@ public:
         value.type == CellType::Error) {
       text_storage_.emplace_back(value.text);
       value.text = text_storage_.back();
+    }
+    // Same lifetime rule for the formula text: it points into the parser scratch
+    // and the writer reads it after this callback returns.
+    if (value.has_formula) {
+      formula_storage_.emplace_back(value.formula);
+      value.formula = formula_storage_.back();
     }
     if (value.type == CellType::Error) ++error_cells_;
     if (value.type == CellType::Invalid) ++invalid_cells_;
@@ -129,6 +136,7 @@ private:
   bool normalize_;
   std::vector<CellView> cells_;
   std::deque<std::string> text_storage_;
+  std::deque<std::string> formula_storage_;
   uint32_t current_row_ = 0;
   uint64_t data_rows_ = 0;
   uint64_t error_cells_ = 0;

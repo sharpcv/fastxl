@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -146,6 +147,56 @@ def budget_replies(replies, mode):
     check(folded > 0, "mcp %s: a cap of 900 folds at least one payload" % mode)
 
 
+def audit_fixes(cli, mode_env):
+    """Native preview, the previously missing tool options and error payloads."""
+    metadata = FIXTURES / "metadata.xlsx"
+    messages = base_messages() + [
+        {"jsonrpc": "2.0", "id": 10, "method": "tools/call",
+         "params": {"name": "fastxl_preview",
+                    "arguments": {"file": str(metadata), "rows": 2}}},
+        {"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+         "params": {"name": "fastxl_preview",
+                    "arguments": {"file": str(metadata), "range": "B2:D4"}}},
+        {"jsonrpc": "2.0", "id": 12, "method": "tools/call",
+         "params": {"name": "fastxl_schema",
+                    "arguments": {"file": str(FIXTURES / "regions.xlsx"),
+                                  "regions": True, "header_row": "auto"}}},
+        {"jsonrpc": "2.0", "id": 13, "method": "tools/call",
+         "params": {"name": "fastxl_search",
+                    "arguments": {"file": str(FIXTURES / "search.xlsx"),
+                                  "query": "invoice", "max_cell_bytes": 32}}},
+        {"jsonrpc": "2.0", "id": 14, "method": "tools/call",
+         "params": {"name": "fastxl_preview",
+                    "arguments": {"file": str(FIXTURES / "basic.csv"), "rows": 2}}},
+        {"jsonrpc": "2.0", "id": 15, "method": "tools/call",
+         "params": {"name": "fastxl_info",
+                    "arguments": {"file": str(FIXTURES / "missing.xlsx")}}},
+    ]
+    replies, _ = run_server(messages, cli=cli, extra_env=mode_env)
+
+    preview = payload_of(replies[10])
+    check(preview["rows"][0]["cells"][0]["ref"] == "A1", "mcp %s: preview refs" % mode_env)
+    ranged = payload_of(replies[11])
+    check(ranged["range"]["first_col"] == 2 and ranged["range"]["last_col"] == 4,
+          "mcp %s: preview range" % mode_env)
+    schema = payload_of(replies[12])
+    check(len(schema["sheets"][0].get("regions", [])) == 2,
+          "mcp %s: schema regions option" % mode_env)
+    search = payload_of(replies[13])
+    check(search["match_count"] > 0, "mcp %s: search max_cell_bytes" % mode_env)
+    csv_preview = payload_of(replies[14])
+    check(csv_preview["rows"][0]["cells"][0]["ref"] == "A1",
+          "mcp %s: csv preview fallback" % mode_env)
+
+    # Missing files fail with the structured contract, not a generic message.
+    error_reply = replies[15]
+    check(error_reply["result"]["isError"] is True, "mcp %s: error flag" % mode_env)
+    error = json.loads(error_reply["result"]["content"][0]["text"])
+    check(error["ok"] is False, "mcp %s: error ok flag" % mode_env)
+    check(error["error"]["code"] == "FileNotFound", "mcp %s: error code" % mode_env)
+    check(error["error"]["exit_code"] == 2, "mcp %s: error exit code" % mode_env)
+
+
 def native_supported():
     for candidate in (ROOT / "build" / "python",):
         if (candidate / "fastxl").is_dir():
@@ -160,11 +211,13 @@ def native_supported():
 
 
 def ensure_fixtures():
-    """Regenerates the feature fixtures when the checkout has none (CI)."""
-    if (FIXTURES / "metadata.xlsx").exists() and (FIXTURES / "large.xlsx").exists():
+    """Regenerates the fixtures when missing or built by an older generator."""
+    generator = FIXTURES / "gen_fixtures.py"
+    marker = FIXTURES / "VERSION"
+    expected = hashlib.sha256(generator.read_bytes()).hexdigest()[:16]
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == expected:
         return
-    subprocess.run([sys.executable, str(FIXTURES / "gen_fixtures.py"), "--out",
-                    str(FIXTURES)], check=True)
+    subprocess.run([sys.executable, str(generator), "--out", str(FIXTURES)], check=True)
 
 
 def feature_fixtures(cli, mode_env):
@@ -244,6 +297,9 @@ def main():
     )
     feature_fixtures(cli, None)
     feature_fixtures(cli, {"FASTXL_FORCE_CLI": "1"})
+    if native_supported():
+        audit_fixes(cli, None)
+    audit_fixes(cli, {"FASTXL_FORCE_CLI": "1"})
 
     check(errors[2]["result"]["isError"] is True, "mcp: unknown tool is an error")
     check(errors[3]["result"]["isError"] is True, "mcp: missing file is an error")

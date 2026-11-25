@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import os
 import shutil
 import sys
@@ -345,6 +346,7 @@ PACKAGE_CONTENT_TYPES = {
     ),
     "drawing": "application/vnd.openxmlformats-officedocument.drawing+xml",
     "chart": "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
+    "theme": "application/vnd.openxmlformats-officedocument.theme+xml",
 }
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -470,32 +472,62 @@ def rels_xml(entries, base=RELS_NS):
     )
 
 
+
+def theme_xml():
+    """Office theme colour scheme: theme indices 0..11 as Excel orders them."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'name="Office"><a:themeElements><a:clrScheme name="Office">'
+        '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>'
+        '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>'
+        '<a:dk2><a:srgbClr val="44546A"/></a:dk2>'
+        '<a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>'
+        '<a:accent1><a:srgbClr val="4472C4"/></a:accent1>'
+        '<a:accent2><a:srgbClr val="ED7D31"/></a:accent2>'
+        '<a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>'
+        '<a:accent4><a:srgbClr val="FFC000"/></a:accent4>'
+        '<a:accent5><a:srgbClr val="5B9BD5"/></a:accent5>'
+        '<a:accent6><a:srgbClr val="70AD47"/></a:accent6>'
+        '<a:hlink><a:srgbClr val="0563C1"/></a:hlink>'
+        '<a:folHlink><a:srgbClr val="954F72"/></a:folHlink>'
+        "</a:clrScheme></a:themeElements></a:theme>"
+    )
+
+
 def metadata_styles():
     # cellXfs: 0 general, 1 percent, 2 red font, 3 yellow fill, 4 strike.
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="%s">'
         '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.00%%"/></numFmts>'
-        '<fonts count="4">'
+        '<fonts count="6">'
         '<font><sz val="11"/><name val="Calibri"/></font>'
         '<font><b/><sz val="11"/><name val="Calibri"/></font>'
         '<font><sz val="11"/><color rgb="FFFF0000"/><name val="Calibri"/></font>'
         '<font><strike/><sz val="11"/><name val="Calibri"/></font>'
+        '<font><sz val="11"/><color theme="4"/><name val="Calibri"/></font>'
+        '<font><sz val="11"/><color theme="4" tint="-0.25"/><name val="Calibri"/></font>'
         "</fonts>"
-        '<fills count="3">'
+        '<fills count="4">'
         '<fill><patternFill patternType="none"/></fill>'
         '<fill><patternFill patternType="gray125"/></fill>'
         '<fill><patternFill patternType="solid">'
         '<fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid">'
+        '<fgColor theme="4" tint="0.4"/><bgColor indexed="64"/></patternFill></fill>'
         "</fills>"
         '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
         '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        '<cellXfs count="5">'
+        '<cellXfs count="8">'
         '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
         '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
         '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
         '<xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/>'
         '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'
         "</cellXfs>"
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
         "</styleSheet>" % MAIN_NS
@@ -591,7 +623,15 @@ def metadata_fixture():
         "<c:val><c:numRef><c:f>Data!$C$2:$C$4</c:f></c:numRef></c:val>"
         "</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"
     )
+    themed_rows = [
+        row_xml(1, [cell_text("A1", "label"), cell_text("B1", "amount")]),
+        row_xml(2, [cell_text("A2", "accent", style=5), cell_number("B2", 1)]),
+        row_xml(3, [cell_text("A3", "tinted"), cell_number("B3", 2, style=6)]),
+        row_xml(4, [cell_text("A4", "filled"), cell_number("B4", 3, style=7)]),
+    ]
+    themed_sheet = sheet_xml(themed_rows)
     extras = [
+        ("xl/theme/theme1.xml", "theme", theme_xml()),
         ("xl/tables/table1.xml", "table", table),
         ("xl/comments1.xml", "comments", comments),
         ("xl/pivotTables/pivotTable1.xml", "pivotTable", pivot),
@@ -607,9 +647,10 @@ def metadata_fixture():
     tail = '<pivotCaches><pivotCache cacheId="1" r:id="rIdPivotCache"/></pivotCaches>'
     workbook_rels = [
         ("rIdPivotCache", "pivotCacheDefinition", "pivotCache/pivotCacheDefinition1.xml"),
+        ("rIdTheme", "theme", "theme/theme1.xml"),
     ]
     return build_package(
-        [("Data", sheet, sheet_rels)],
+        [("Data", sheet, sheet_rels), ("Themed", themed_sheet, None)],
         extras=extras,
         defined_names=defined_names,
         workbook_tail=tail,
@@ -654,6 +695,33 @@ def large_fixture(rows=15000, cols=10):
             cells.append(cell_number("%s%d" % (column_name(col - 1), row), row * col))
         lines.append(row_xml(row, cells))
     return build_package([("Data", sheet_xml(lines), None)])
+
+
+def formulas_fixture():
+    """Shared formulas: one master cell, followers only carry si/cached value."""
+    rows = [
+        row_xml(1, [cell_text("A1", "input"), cell_text("B1", "double"),
+                    cell_text("C1", "running"), cell_text("D1", "mixed")]),
+        row_xml(2, [
+            cell_number("A2", 1),
+            '<c r="B2"><f t="shared" ref="B2:B4" si="0">A2*2</f><v>2</v></c>',
+            '<c r="C2"><f t="shared" ref="C2:C4" si="1">SUM($A2:B2)</f><v>3</v></c>',
+            '<c r="D2"><f t="shared" ref="D2:D4" si="2">$A2+A$2</f><v>2</v></c>',
+        ]),
+        row_xml(3, [
+            cell_number("A3", 2),
+            '<c r="B3"><f t="shared" si="0"/><v>4</v></c>',
+            '<c r="C3"><f t="shared" si="1"/><v>9</v></c>',
+            '<c r="D3"><f t="shared" si="2"/><v>3</v></c>',
+        ]),
+        row_xml(4, [
+            cell_number("A4", 3),
+            '<c r="B4"><f t="shared" si="0"/><v>6</v></c>',
+            '<c r="C4"><f t="shared" si="1"/><v>18</v></c>',
+            '<c r="D4"><f t="shared" si="2"/><v>4</v></c>',
+        ]),
+    ]
+    return build_package([("Formula", sheet_xml(rows), None)])
 
 
 def search_fixture():
@@ -786,8 +854,13 @@ def make_fixtures(out_dir):
     multi_fixture().save(os.path.join(out_dir, "multi.xlsx"))
     large_fixture().save(os.path.join(out_dir, "large.xlsx"))
     search_fixture().save(os.path.join(out_dir, "search.xlsx"))
+    formulas_fixture().save(os.path.join(out_dir, "formulas.xlsx"))
     regions_fixture().save(os.path.join(out_dir, "regions.xlsx"))
     budget_fixture().save(os.path.join(out_dir, "budget.xlsx"))
+
+    version = hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:16]
+    with open(os.path.join(out_dir, "VERSION"), "w", encoding="utf-8") as handle:
+        handle.write(version + "\n")
 
     print("fixtures written to %s" % out_dir)
 

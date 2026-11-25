@@ -320,7 +320,9 @@ private:
         std::string_view name = i < record_.fields.size() ? record_.field(i) : std::string_view{};
         if (!is_valid_utf8(name))
           throw_error(ErrorCode::InvalidUtf8,
-                      "CSV header field " + std::to_string(i + 1) + " is not valid UTF-8");
+                      "CSV header field " + std::to_string(i + 1) +
+                          " is not valid UTF-8; fastxl reads UTF-8 (BOM allowed) and does not "
+                          "detect GBK/GB18030, so re-save the file as UTF-8");
         column_storage_[i] = name.empty() ? "column_" + std::to_string(i + 1) : std::string(name);
       }
       effective_header_row_ = static_cast<uint32_t>(record_.start_line);
@@ -374,8 +376,10 @@ private:
       if (cell.type == CellType::Text) {
         if (!is_valid_utf8(cell.text))
           throw_error(ErrorCode::InvalidUtf8,
-                      "CSV record " + std::to_string(number) + " field " + std::to_string(i + 1) +
-                          " is not valid UTF-8");
+                      "CSV record " + std::to_string(number) + " field " +
+                          std::to_string(i + 1) +
+                          " is not valid UTF-8; fastxl reads UTF-8 (BOM allowed) and does not "
+                          "detect GBK/GB18030, so re-save the file as UTF-8");
         text_storage_.emplace_back(cell.text);
         cell.text = text_storage_.back();
       }
@@ -447,7 +451,9 @@ public:
           const std::string_view text = to_text(cells[index], text_scratch_);
           if (!is_valid_utf8(text))
             throw_error(ErrorCode::InvalidUtf8,
-                        "CSV cell " + std::to_string(index + 1) + " is not valid UTF-8");
+                        "CSV cell " + std::to_string(index + 1) +
+                            " is not valid UTF-8; fastxl reads UTF-8 (BOM allowed) and does not "
+                            "detect GBK/GB18030, so re-save the file as UTF-8");
           field_buffer_.assign(text.data(), text.size());
           return std::string_view(field_buffer_);
         },

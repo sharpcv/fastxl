@@ -74,6 +74,12 @@ stable fastxl code in `.code` (`FileNotFound`, `InvalidSheetRef`, `EmptyTable`,
 ...). `preview` reports the resolved worksheet name in `sheet`; cells beyond the
 header-derived column set are counted in `extra_cells`.
 
+`preview_sheet(file, sheet=None, header_row=1, rows=20, range="", columns="",
+max_cell_bytes=256, max_bytes=0)` returns the CLI `preview` contract for one xlsx
+sheet (used range, resolved header row, merged cells, comments, tables, pivots,
+charts, A1 refs) instead of the typed-row shape; `Session.preview_sheet` serves
+it from the cached workbook.
+
 Every read function accepts `max_bytes=0`; a positive value folds the payload and
 adds a `budget` object (`max_bytes`, `bytes`, `applied`, `within_budget`,
 `stages`, `folded_columns`) identical to the CLI's `--max-bytes`.
@@ -87,8 +93,13 @@ used entry past `capacity` (default 8). It covers `info`/`schema`/`probe`/
 with fastxl.Session(capacity=8) as session:
     profile = session.probe("book.xlsx", max_bytes=4000)
     hits = session.search("book.xlsx", "invoice")
+    page = session.preview_sheet("book.xlsx", rows=20)
     print(session.stats())  # size, capacity, hits, misses
 ```
+
+On Windows the session opens workbooks without `mmap` by default, so Excel can
+still overwrite the file while it is cached; `Session(memory_map=True)` opts in.
+`fastxl.Error` carries `.code` and the documented `.exit_code` (2/3/4).
 
 The package is PEP 561 typed: `_fastxl.pyi` describes every function and result
 shape, and `py.typed` marks the distribution. Run `pyright` at the repository

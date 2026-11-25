@@ -121,6 +121,8 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
   log, milestone status and verification record.
 - [`fastxl_optimization_roadmap.md`](fastxl_optimization_roadmap.md) — roadmap and
   remaining design directions.
+- [`fastxl_m7_audit_and_m8_plan.md`](fastxl_m7_audit_and_m8_plan.md) — the M7 review
+  that drove the M8.1 fixes.
 - [`bindings/README.md`](bindings/README.md) — building the Python module on Windows
   and Linux.
 

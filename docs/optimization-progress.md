@@ -32,6 +32,7 @@
 | M6 | Writer 公式透传、自定义样式、并行写、安装规则 | ✅ 完成并验证 |
 | M7 | `Session` 常驻对象、MCP native-first + LRU、`--max-bytes` 预算 | ✅ 完成并验证（Linux x86_64 + Windows） |
 | M8 | 测试fixtures/脚本/bench、全量文档收尾 | ✅ 完成（CI 待首次运行） |
+| M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
 
 ---
 
@@ -203,6 +204,60 @@
 
 `skill/scripts/fastxl_skill.py` 的 `info` / `schema` / `probe` / `preview` 增加 `--max-bytes`（native 与 CLI 两条路径都透传），`SKILL.md` 同步示例。
 
+### M8.1 — M7 审计修复
+
+对应 `fastxl_m7_audit_and_m8_plan.md` 的问题清单。
+
+**MCP 契约（P0）**
+
+- `fastxl_schema` / `fastxl_probe` 的 `TOOL_SCHEMAS` 补上 `regions`，`fastxl_search` 补上
+  `max_cell_bytes`；CLI 回退路径同时转发 `--regions`。
+- `fastxl_preview` 改为原生：新增 `fastxl.preview_sheet()` / `Session.preview_sheet()`，
+  与 CLI `preview` 共享同一份 JSON 组装（`preview_json.{hpp,cpp}`）。MCP 对 xlsx 走
+  native，CSV/JSONL 预览仍走 CLI。
+- 确定性输入错误不再"先 native 失败再起一次 CLI"：捕获 `fastxl.Error` 后直接返回
+  结构化错误对象（含 `code` / `message` / `exit_code` / `command` / `file`）。
+
+**Windows 常驻文件锁（P0）**
+
+- `Session` 新增 `memory_map` 参数（`None` 表示平台默认：Windows 关闭、其它开启），
+  通过 `OpenOptions::memory_map` 传给 `WorkBook::open`；Windows 上常驻缓存不再持有
+  阻塞 Excel 保存的映射，需要时可用 `Session(memory_map=True)` 显式打开。
+
+**分层与 Schema 对齐（P1）**
+
+- `json_budget.hpp` 从 `projects/fastxl-cli/src/` 下沉到
+  `projects/fastxl-core/include/fastxl/detail/`，命名空间改为 `fastxl::detail`，CLI 与
+  Python 绑定都包含同一份实现，绑定不再依赖 CLI 的预算源码。
+- 核对 `docs/probe.schema.json`：预算字段为 `folded_columns` / `dropped_rows` /
+  `dropped_matches`，与实现、文档一致（审计提到的 `omitted_columns` 不存在）。
+
+**真实 Excel 边界（P2）**
+
+- **共享公式**：`SheetParser` 追踪 `<f t="shared" si=...>` 主公式，按行/列偏移重写跟随
+  单元格的相对引用（`$` 绝对部分保持），`preview`、`search --field formula`、
+  `formula_cells` / `formula_links` 都能看到整段公式。使用共享公式的工作表由并行
+  profiling 回退为单遍扫描（跟随公式可能落在不同行片段）。
+- **主题色**：解析 `xl/theme/theme1.xml` 的 12 色方案，按 `theme="N"` + `tint` 解析为
+  具体 RGB（HSL 亮度调整），`font_color` / `fill_color` 对 Office 主题给出
+  `#4472C4`、tint 0.4 → `#8FAADC`、tint -0.25 → `#2F5597` 等结果。
+- **`convert` 公式丢失**：定位到 `CopyHandler` 把 `CellView.formula`（指向解析器临时
+  缓冲的 view）直接传到 writer，回调返回后失效，出现 `SUM` → `UM` 的首字符丢失；
+  改为与文本一样复制到行内存储，xlsx→xlsx 现在完整保留公式文本。
+- **CSV 编码诊断**：UTF-8 校验失败时明确提示"fastxl 只读 UTF-8（允许 BOM），不检测
+  GBK/GB18030，请另存为 UTF-8"，而不是只说 "not valid UTF-8"。
+
+**测试**
+
+- 三个测试套件新增 `audit_fixes`：主题色、共享公式（含 `$` 绝对引用与区间）、
+  `convert` 公式保留、GBK 诊断、`preview_sheet` 与 CLI 逐字节对齐、`Session.memory_map`、
+  `Error.exit_code`、MCP 的 `regions` / `max_cell_bytes` / 原生 preview / 错误对象。
+- `test_cli.py` 增加 JSON Schema 强校验：`info`、`preview`、`schema`、`probe`、`search`、
+  `errors`、失败错误对象与预算输出共 8 类，使用 `docs/probe.schema.json`（未安装
+  `jsonschema` 时自动跳过）。
+- fixture 生成器写入 `VERSION` 标记（生成器源码哈希），测试在生成器变更后自动重建，
+  避免本地使用过期 fixture。
+
 ---
 
 ## 4. 验证记录
@@ -288,6 +343,35 @@ probe 层基准（`large.xlsx`，15000 行 × 10 列，5 次中位数，本机 L
 - `schema` / `probe` 由扫描本身主导，native 与 CLI 差距缩小，`Session` 只省掉包解析（约 2%），这与 M7 的设计预期一致。
 - `--max-bytes` 的折叠成本很小：`schema` 86 → 91 ms（CLI）、80 → 80 ms（native）。
 
+### M8.1 验证（Linux x86_64）
+
+```sh
+xmake build -y fastxl-tests fastxl-cli fastxl-python
+./build/linux/x86_64/release/fastxl-tests
+python projects/tests/test_cli.py
+python projects/tests/test_python.py
+python projects/tests/test_mcp.py
+```
+
+结果：
+
+```text
+122 tests, 0 failures
+CLI checks passed
+Python checks passed
+MCP checks passed
+pyright: 0 errors
+```
+
+- `preview` 重构前后在 19 组用例（xlsx/csv/jsonl、range/columns/auto header/budget/
+  text 布局/regions）下输出逐字节一致。
+- `fastxl.preview_sheet()` 与 CLI `preview --json` 在 9 组参数下完全相等；`Session`
+  第二次调用命中缓存。
+- 主题色：`A2` → `#4472C4`、`B3` → `#2F5597`、`B4` → `#8FAADC`。
+- 共享公式：`B2/B3/B4` → `A2*2` / `A3*2` / `A4*2`，`C4` → `SUM($A4:B4)`，
+  `D3` → `$A3+A$2`；`search "A3*2"` 命中 `formula` 字段。
+- `convert` 后公式文本 `SUM(C2:C4)` 完整保留（修复前为 `UM(C2:C4)`）。
+
 ### 验证边界
 
 - Windows x64（原作者 + CI）与 Linux x86_64（本次）已本地验证；Linux arm64 由新增 CI job 覆盖（首次运行结果待观察）。
@@ -318,12 +402,18 @@ probe 层基准（`large.xlsx`，15000 行 × 10 列，5 次中位数，本机 L
 
 ## 6. 剩余工作
 
-M0–M8 均已落地，后续可选方向：
+审计提出的 P0/P1 与可落地的 P2 项已落地；以下需要单独排期：
 
-- 观察 `ci.yml` 在 Linux arm64 与 Windows 上的首次运行结果，必要时调整 runner 或跳过项。
-- 把 `bench.py` 的 median 作为 CI 基线并设置回归阈值（目前只在本地记录）。
-- Windows 上的 Python 模块 CI（需要固定 CPython 版本与 `FASTXL_PY_*` 路径）。
-- 较长尾的 roadmap 条目（Session 常驻化之外的多轮会话、更多 Excel 元数据）见 `fastxl_optimization_roadmap.md`。
+- **CI 首次运行观察**：Linux x64 / arm64 与 Windows 三个 job 的真实结果，arm64 的
+  NEON 路径需要实际跑通后才算验证完成。
+- **sanitizer 与无异常构建**：ASan/UBSan/TSan 并发压测，以及 `-fno-exceptions` 下的
+  `Result<T>` / `try_*` 编译验证。
+- **SIMD 等价性**：同一批输入下 AVX2/SSE2/scalar（x86_64）与 NEON/scalar（aarch64）
+  逐单元格对比。
+- **第三方互操作**：LibreOffice headless 重算、`openpyxl` / `python-calamine` 对照基准
+  与 `bench.py` 的回归阈值。
+- **未覆盖的格式细节**：`indexed` 调色板、数组公式（`t="array"`）展开、Windows 上
+  `Session(memory_map=True)` 的实测行为。
 
 ## 7. 使用与构建
 

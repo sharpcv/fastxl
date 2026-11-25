@@ -31,7 +31,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace fastxl_cli {
+namespace fastxl::detail {
 
 using BudgetJson = nlohmann::ordered_json;
 
@@ -313,4 +313,4 @@ inline void apply_output_budget(BudgetJson& root, size_t max_bytes) {
   }
 }
 
-} // namespace fastxl_cli
+} // namespace fastxl::detail

@@ -50,6 +50,9 @@ target("fastxl-python")
     set_languages("c++20")
     add_files("fastxl_module.cpp")
     add_files("../projects/fastxl-cli/src/headers.cpp")
+    add_files("../projects/fastxl-cli/src/preview_json.cpp")
+    add_files("../projects/fastxl-cli/src/args.cpp")
+    add_files("../projects/fastxl-cli/src/common.cpp")
     if py_include then
         add_includedirs(py_include)
     end

@@ -118,6 +118,7 @@ rows = fastxl.preview("book.xlsx", sheet="Data", rows=20)
 | `schema(file, sheet=None, header_row=1, ...)` | Compact per-column schema (`sheets` array) |
 | `probe(file, sheet=None, header_row=1, ...)` | Full per-column profile for one sheet |
 | `preview(file, ..., rows=20, offset=0)` | Typed rows as dicts (or lists) |
+| `preview_sheet(file, ..., rows=20, range="", columns="")` | CLI `preview` payload: used range, header row, merges, comments, tables, pivots, charts |
 | `read_rows(..., limit=20)` | Same as `preview`; `limit=0` reads all rows |
 | `write_xlsx(file, rows, ...)` | Atomic xlsx writer for dicts or sequences |
 
@@ -141,7 +142,11 @@ such files through the CLI so ragged sheets return every column.
 
 `fastxl.Error` is a `RuntimeError` subclass with the stable code in `.code`
 (`FileNotFound`, `InvalidSheetRef`, `UnsupportedFormat`, `EmptyTable`,
-`ColumnCountMismatch`, ...).
+`ColumnCountMismatch`, ...) and the documented exit code in `.exit_code`
+(2 input, 3 output, 4 internal). `Session` caches the opened workbook, so
+`session.preview_sheet(...)` also skips the package parse. On Windows the cache
+opens without `mmap` by default (so Excel can still save the file);
+`Session(memory_map=True)` opts in.
 
 ## Reading rows
 

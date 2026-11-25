@@ -13,6 +13,7 @@ class Error(RuntimeError):
     """Stable fastxl error; ``code`` carries the machine-readable code."""
 
     code: str
+    exit_code: int
 
 class DefinedName(TypedDict):
     name: str
@@ -327,6 +328,17 @@ class SearchResult(TypedDict):
     searched_cells: int
     budget: NotRequired[Budget]
 
+def preview_sheet(
+    file: str,
+    sheet: SheetSelector = None,
+    header_row: HeaderRow = 1,
+    format: str = "",
+    rows: int = 20,
+    range: str = "",
+    columns: str = "",
+    max_cell_bytes: int = 256,
+    max_bytes: int = 0,
+) -> dict[str, Any]: ...
 def info(file: str, format: str = "", max_bytes: int = 0) -> InfoResult: ...
 def schema(
     file: str,
@@ -409,7 +421,19 @@ class Session:
     changes; the least recently used entry is evicted past ``capacity``.
     """
 
-    def __init__(self, capacity: int = 8) -> None: ...
+    def __init__(self, capacity: int = 8, memory_map: bool | None = None) -> None: ...
+    def preview_sheet(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        rows: int = 20,
+        range: str = "",
+        columns: str = "",
+        max_cell_bytes: int = 256,
+        max_bytes: int = 0,
+    ) -> dict[str, Any]: ...
     def info(
         self, file: str, format: str = "", max_bytes: int = 0
     ) -> InfoResult: ...
@@ -496,6 +520,8 @@ class Session:
     def stats(self) -> dict[str, int]: ...
     @property
     def capacity(self) -> int: ...
+    @property
+    def memory_map(self) -> bool: ...
     def __len__(self) -> int: ...
     def __enter__(self) -> "Session": ...
     def __exit__(self, *args: object) -> None: ...

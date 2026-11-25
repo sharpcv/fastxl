@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -53,7 +54,22 @@ struct StylesheetData {
   std::vector<CellStyleFlags> flags;     // per xf
 };
 
-StylesheetData parse_stylesheet(std::string_view xml);
+// Theme colour scheme in the order used by style `theme="N"` attributes:
+// 0 = lt1/background1, 1 = dk1/text1, 2 = lt2/background2, 3 = dk2/text2,
+// 4..9 = accent1..6, 10 = hyperlink, 11 = followed hyperlink. Real workbooks
+// usually express font/fill colors through this palette plus a tint.
+struct ThemePalette {
+  std::array<uint32_t, 12> colors{};
+  bool present = false;
+
+  // RGB for `index` with `tint` (-1..1): positive tints lighten towards white,
+  // negative tints darken towards black.
+  uint32_t resolve(uint32_t index, double tint) const noexcept;
+};
+
+ThemePalette parse_theme(std::string_view xml);
+
+StylesheetData parse_stylesheet(std::string_view xml, const ThemePalette* theme = nullptr);
 
 // Parses sharedStrings.xml. `load == false` only counts entries.
 uint64_t parse_shared_strings(std::string_view xml, SharedStrings* target, size_t max_bytes,

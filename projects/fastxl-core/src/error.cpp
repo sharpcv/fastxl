@@ -50,6 +50,21 @@ std::string_view to_string(ErrorCode code) noexcept {
   return "Internal";
 }
 
+int exit_code(ErrorCode code) noexcept {
+  switch (code) {
+  case ErrorCode::IoError:
+  case ErrorCode::AtomicReplaceFailed: return 3;
+  case ErrorCode::Internal:
+  case ErrorCode::Closed:
+  case ErrorCode::CellOrderViolation:
+  case ErrorCode::SheetOrderViolation:
+  case ErrorCode::WorkbookAlreadyStarted:
+  case ErrorCode::Aborted:
+  case ErrorCode::Count: return 4;
+  default: return 2;
+  }
+}
+
 std::string_view to_explanation(ErrorCode code) noexcept {
   switch (code) {
   case ErrorCode::FileNotFound: return "file does not exist or cannot be opened";

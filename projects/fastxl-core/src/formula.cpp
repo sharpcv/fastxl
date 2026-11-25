@@ -142,4 +142,119 @@ std::vector<FormulaRef> parse_formula_refs(std::string_view formula,
   return refs;
 }
 
+
+namespace {
+
+bool parse_ref_token(std::string_view token, bool* col_abs, uint32_t* col, bool* row_abs,
+                     uint32_t* row) noexcept {
+  size_t pos = 0;
+  *col_abs = false;
+  *row_abs = false;
+  if (pos < token.size() && token[pos] == '$') {
+    *col_abs = true;
+    ++pos;
+  }
+  uint32_t column = 0;
+  size_t letters = 0;
+  while (pos < token.size() && is_ascii_alpha(token[pos])) {
+    if (letters >= 3) return false; // more than three letters is not a column
+    column = column * 26 + static_cast<uint32_t>((token[pos] | 0x20) - 'a' + 1);
+    ++pos;
+    ++letters;
+  }
+  if (letters == 0 || column == 0 || column > 16384) return false;
+  if (pos < token.size() && token[pos] == '$') {
+    *row_abs = true;
+    ++pos;
+  }
+  uint32_t row_number = 0;
+  size_t digits = 0;
+  while (pos < token.size() && is_digit(token[pos])) {
+    if (digits >= 7) return false;
+    row_number = row_number * 10 + static_cast<uint32_t>(token[pos] - '0');
+    ++pos;
+    ++digits;
+  }
+  if (digits == 0 || row_number == 0 || row_number > 1048576) return false;
+  if (pos != token.size()) return false;
+  *col = column;
+  *row = row_number;
+  return true;
+}
+
+void append_reference(std::string& out, uint32_t col, bool col_abs, uint32_t row, bool row_abs) {
+  if (col_abs) out.push_back('$');
+  const std::string letters = fastxl::column_letters(col);
+  out.append(letters);
+  if (row_abs) out.push_back('$');
+  out.append(std::to_string(row));
+}
+
+} // namespace
+
+std::string translate_shared_formula(std::string_view formula, int32_t row_offset,
+                                     int32_t col_offset) {
+  if (row_offset == 0 && col_offset == 0) return std::string(formula);
+  std::string out;
+  out.reserve(formula.size() + 8);
+  size_t index = 0;
+  while (index < formula.size()) {
+    const char c = formula[index];
+    if (c == '"' || c == '\'') {
+      // String literal or quoted sheet name: copy through the closing quote.
+      const char quote = c;
+      out.push_back(c);
+      ++index;
+      while (index < formula.size()) {
+        const char current = formula[index];
+        out.push_back(current);
+        ++index;
+        if (current == quote) {
+          // Excel escapes the quote by doubling it inside string literals.
+          if (index < formula.size() && formula[index] == quote) {
+            out.push_back(quote);
+            ++index;
+            continue;
+          }
+          break;
+        }
+      }
+      continue;
+    }
+    if (is_ascii_alpha(c) || c == '$') {
+      size_t pos = index;
+      if (scan_cell(formula, pos)) {
+        const bool followed_by_call = pos < formula.size() && formula[pos] == '(';
+        const bool identifier_tail = pos < formula.size() && (is_ascii_alpha(formula[pos]) ||
+                                                             is_digit(formula[pos]) ||
+                                                             formula[pos] == '_' ||
+                                                             formula[pos] == '.');
+        if (!followed_by_call && !identifier_tail) {
+          const std::string_view token = formula.substr(index, pos - index);
+          bool col_abs = false;
+          bool row_abs = false;
+          uint32_t col = 0;
+          uint32_t row = 0;
+          if (parse_ref_token(token, &col_abs, &col, &row_abs, &row)) {
+            const int64_t shifted_col = static_cast<int64_t>(col) +
+                                        (col_abs ? 0 : static_cast<int64_t>(col_offset));
+            const int64_t shifted_row = static_cast<int64_t>(row) +
+                                        (row_abs ? 0 : static_cast<int64_t>(row_offset));
+            if (shifted_col >= 1 && shifted_col <= 16384 && shifted_row >= 1 &&
+                shifted_row <= 1048576) {
+              append_reference(out, static_cast<uint32_t>(shifted_col), col_abs,
+                               static_cast<uint32_t>(shifted_row), row_abs);
+              index = pos;
+              continue;
+            }
+          }
+        }
+      }
+    }
+    out.push_back(c);
+    ++index;
+  }
+  return out;
+}
+
 } // namespace fastxl

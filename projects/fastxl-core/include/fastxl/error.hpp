@@ -65,6 +65,10 @@ std::string_view to_string(ErrorCode code) noexcept;
 // `ErrorCode::Count` returns "internal sentinel; never reported".
 std::string_view to_explanation(ErrorCode code) noexcept;
 
+// Documented CLI exit code for an error (1 is reserved for usage errors):
+// 2 = input/format, 3 = output/atomic replace, 4 = internal state.
+int exit_code(ErrorCode code) noexcept;
+
 // std::error_code adapter. The category name is "fastxl"; messages use
 // to_explanation(). Internals still throw; these are boundary adapters.
 const std::error_category& fastxl_category() noexcept;
