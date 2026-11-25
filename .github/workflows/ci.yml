@@ -49,6 +49,9 @@ jobs:
       - name: Build
         run: xmake build -y fastxl-tests fastxl-cli fastxl-python
 
+      - name: Generate fixtures
+        run: python3 projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
+
       - name: C++ tests
         run: |
           bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
@@ -82,6 +85,9 @@ jobs:
 
       - name: Build
         run: xmake build -y fastxl-tests fastxl-cli
+
+      - name: Generate fixtures
+        run: python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
 
       - name: C++ tests
         shell: pwsh
