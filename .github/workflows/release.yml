@@ -137,4 +137,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ inputs.tag }}" dist/*.zip dist/SHA256SUMS.txt --clobber
+          # The publish job has no checkout, so point gh at the repository.
+          gh release upload "${{ inputs.tag }}" dist/*.zip dist/SHA256SUMS.txt \
+            --clobber -R "${{ github.repository }}"
