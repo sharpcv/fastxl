@@ -17,7 +17,9 @@ esac
 export XMAKE_ROOT=y
 
 if ! command -v xmake >/dev/null 2>&1; then
-  curl -fsSL https://xmake.io/install.sh | bash
+  # xmake.io/install.sh currently 404s; the official installer lives in the
+  # repository and defaults to the prebuilt `__run__` package.
+  curl -fsSL https://raw.githubusercontent.com/xmake-io/xmake/master/scripts/get.sh | bash
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
