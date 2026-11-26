@@ -972,7 +972,17 @@ struct RowStream {
   bool with_cells = false;
   bool exhausted = false;
   bool truncated = false;
+  // Captured from the reader before it is released so the JSON payload keeps
+  // reporting `extra_cells` after a natural (non-close()) exhaustion.
+  uint64_t extra_cells = 0;
   RowShape shape = RowShape::Dicts;
+
+  // Releases the reader (and its file handle) as soon as no more rows can
+  // arrive; `closed()` is derived from the reader pointer.
+  void release_reader() {
+    if (reader != nullptr) extra_cells = reader->extra_cells();
+    reader.reset();
+  }
 
   bool advance(py::object& out) {
     while (!exhausted) {
@@ -989,6 +999,7 @@ struct RowStream {
       }
       if (!have_row) {
         exhausted = true;
+        release_reader();
         return false;
       }
       if (skipped < offset) {
@@ -998,6 +1009,7 @@ struct RowStream {
       if (limit != 0 && emitted >= limit) {
         truncated = true;
         exhausted = true;
+        release_reader();
         return false;
       }
       if (with_cells) {
@@ -1165,7 +1177,7 @@ py::dict rows_payload(RowStream& stream, py::list rows, size_t max_bytes) {
   root["rows"] = std::move(rows);
   root["truncated"] = stream.truncated;
   root["rows_read"] = stream.emitted;
-  root["extra_cells"] = stream.reader->extra_cells();
+  root["extra_cells"] = stream.extra_cells;
   return budget_dict(std::move(root), max_bytes);
 }
 
@@ -1202,7 +1214,7 @@ public:
 
   void close() {
     if (!stream_) return;
-    stream_->reader.reset();
+    stream_->release_reader();
     stream_->exhausted = true;
   }
 
@@ -1770,6 +1782,14 @@ private:
   }
 
   void store_search_locked(const std::string& key, const Json& root) {
+    // A concurrent caller may have cached the same key while this thread was
+    // running search_json() without the lock; update in place so the LRU list
+    // never gets a duplicate node for one key.
+    if (auto found = searches_.find(key); found != searches_.end()) {
+      found->second.root = root;
+      search_order_.splice(search_order_.begin(), search_order_, found->second.order);
+      return;
+    }
     while (searches_.size() >= search_capacity_ && !search_order_.empty()) {
       searches_.erase(search_order_.back());
       search_order_.pop_back();
@@ -1823,6 +1843,13 @@ private:
       // Another thread opened the same file first; prefer its entry.
       order_.splice(order_.begin(), order_, found->second.order);
       return found->second.book;
+    }
+    if (found != entries_.end()) {
+      // The cached workbook was stale (the file was rewritten); drop it before
+      // re-inserting, otherwise emplace() silently keeps the old entry while the
+      // LRU list grows a duplicate node.
+      order_.erase(found->second.order);
+      entries_.erase(found);
     }
     while (entries_.size() >= capacity_ && !order_.empty()) {
       entries_.erase(order_.back());

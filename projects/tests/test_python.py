@@ -279,6 +279,22 @@ def iterator_release_check(fastxl, work_dir):
     else:
         check(loop_renamed.exists(), "iter_rows: with releases the file handle")
 
+    # Natural exhaustion (no explicit close()) releases the reader immediately.
+    drained_path = work_dir / "iterator-drained.xlsx"
+    drained_renamed = work_dir / "iterator-drained-renamed.xlsx"
+    shutil.copy(source, drained_path)
+    drained = fastxl.iter_rows(str(drained_path))
+    consumed = list(drained)
+    check(len(consumed) > 0, "iter_rows: drained rows")
+    check(drained.closed is True, "iter_rows: exhaustion releases the reader")
+    check(drained.truncated is False, "iter_rows: exhaustion is not truncation")
+    try:
+        os.replace(drained_path, drained_renamed)
+    except OSError as error:
+        check(False, "iter_rows: exhaustion releases the file handle (%s)" % error)
+    else:
+        check(drained_renamed.exists(), "iter_rows: exhaustion releases the file handle")
+
 
 def thread_safety_checks(fastxl):
     """Heavy calls release the GIL and Session caches stay consistent."""
@@ -377,6 +393,72 @@ def session_cache_checks(fastxl, work_dir):
     tiny.probe(str(first_copy))
     tiny.probe(str(second_copy))
     check(tiny.stats()["profiles"] == 1, "cache: profile capacity evicts")
+
+
+def session_refresh_checks(fastxl, work_dir):
+    """A rewritten file replaces the cached workbook instead of returning stale data."""
+    path = work_dir / "refresh.xlsx"
+    shutil.copy(FIXTURES / "basic.xlsx", path)
+    session = fastxl.Session(capacity=2)
+    stale = session.info(str(path))
+    check(len(stale["sheets"]) == 2, "refresh: initial sheet count")
+
+    # Replace the file with a different workbook (new content, size and mtime)
+    # while the session still holds the old one.
+    shutil.copy(FIXTURES / "metadata.xlsx", path)
+    stamp = time.time() + 2
+    os.utime(path, (stamp, stamp))
+    misses = session.stats()["misses"]
+    fresh = session.info(str(path))
+    check(session.stats()["misses"] == misses + 1, "refresh: rewrite misses")
+    check(fresh["sheets"] == fastxl.info(str(path))["sheets"],
+          "refresh: rewritten file returns fresh content")
+    check(len(session) == 1, "refresh: refresh replaces instead of duplicating")
+
+    # The refreshed entry is the resident one: it must hit and survive an
+    # eviction of the least recently used workbook.
+    other = work_dir / "refresh-other.xlsx"
+    shutil.copy(FIXTURES / "basic.xlsx", other)
+    session.info(str(other))
+    hits = session.stats()["hits"]
+    check(session.info(str(path))["sheets"] == fresh["sheets"],
+          "refresh: refreshed entry survives eviction")
+    check(session.stats()["hits"] == hits + 1, "refresh: refreshed entry hits")
+    check(len(session) == 2, "refresh: capacity respected")
+
+
+def concurrent_search_checks(fastxl, work_dir):
+    """Concurrent misses on one search key keep a single, well-formed cache entry."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    names = ("search-a.xlsx", "search-b.xlsx", "search-c.xlsx")
+    paths = []
+    for name in names:
+        path = work_dir / name
+        shutil.copy(FIXTURES / "basic.xlsx", path)
+        paths.append(path)
+    first, second, third = paths
+    session = fastxl.Session(capacity=2, search_capacity=2)
+
+    def run(path):
+        return session.search(str(path), "a", max_hits=3)["match_count"]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        counts = list(pool.map(run, [first] * 8))
+    check(len(set(counts)) == 1, "search race: consistent results")
+    check(session.stats()["searches"] == 1, "search race: one cache entry per key")
+
+    session.search(str(second), "a", max_hits=3)
+    check(session.stats()["searches"] == 2, "search race: second key cached")
+    # Touch the first key, then fill the cache: the touched entry is the most
+    # recently used one and must not be evicted through a dangling LRU node.
+    session.search(str(first), "a", max_hits=3)
+    hits = session.stats()["search_hits"]
+    session.search(str(third), "a", max_hits=3)
+    check(session.stats()["searches"] == 2, "search race: capacity respected")
+    session.search(str(first), "a", max_hits=3)
+    check(session.stats()["search_hits"] == hits + 1,
+          "search race: recently used key survives eviction")
 
 
 def ensure_fixtures():
@@ -529,6 +611,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="fastxl-python-") as directory:
         session_checks(fastxl, Path(directory))
         session_cache_checks(fastxl, Path(directory))
+        session_refresh_checks(fastxl, Path(directory))
+        concurrent_search_checks(fastxl, Path(directory))
         iterator_release_check(fastxl, Path(directory))
         cli_parity(fastxl, cli, Path(directory))
         audit_fixes(fastxl, cli, Path(directory))
