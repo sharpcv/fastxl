@@ -4,6 +4,8 @@
 Usage:
     python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
     python projects/tests/fixtures/gen_fixtures.py --big build/fixtures/big.xlsx --rows 200000 --cols 8
+    python projects/tests/fixtures/gen_fixtures.py --big build/fixtures/huge.xlsx \
+        --rows 1000000 --cols 8 --no-csv
 """
 
 import argparse
@@ -865,40 +867,111 @@ def make_fixtures(out_dir):
     print("fixtures written to %s" % out_dir)
 
 
-def make_big(path, rows, cols):
+def make_big(path, rows, cols, with_csv=True):
+    """Writes the large single-sheet fixture, streaming the worksheet part.
+
+    Rows are generated chunk by chunk straight into the ZIP entry, so
+    ``--rows 1000000`` runs in a few MiB of Python memory instead of building the
+    whole (hundreds of MiB) worksheet XML as one string.
+    """
     out_dir = os.path.dirname(os.path.abspath(path))
     os.makedirs(out_dir, exist_ok=True)
     shared = ["name-%d" % index for index in range(min(rows, 1000))]
-    sheet_rows = []
-    header = "<row r=\"1\">" + "".join(
-        '<c r="%s1" t="inlineStr"><is><t>c%d</t></is></c>' % (column_name(index), index)
-        for index in range(1, cols + 1)
-    ) + "</row>"
-    sheet_rows.append(header)
-    for row in range(2, rows + 1):
-        cells = []
-        cells.append('<c r="A%d"><v>%d</v></c>' % (row, row - 1))
-        for col in range(2, cols + 1):
-            if col == 2:
-                cells.append(
-                    '<c r="%s%d" t="s"><v>%d</v></c>'
-                    % (column_name(col), row, (row - 2) % len(shared))
-                )
-            elif col == 3:
-                cells.append('<c r="%s%d"><v>%.3f</v></c>' % (column_name(col), row, row * 0.5))
-            elif col == 4:
-                cells.append('<c r="%s%d" t="b"><v>%d</v></c>' % (column_name(col), row, row % 2))
-            else:
-                cells.append('<c r="%s%d"><v>%d</v></c>' % (column_name(col), row, row * col))
-        sheet_rows.append('<row r="%d">%s</row>' % (row, "".join(cells)))
-    build_xlsx([("Big", sheet_xml(sheet_rows))], shared_strings=shared).save(path)
-    with open(os.path.splitext(path)[0] + ".csv", "w", encoding="utf-8", newline="") as handle:
-        handle.write(",".join("c%d" % index for index in range(1, cols + 1)) + "\n")
-        for row in range(1, rows):
-            values = [str(row)]
+
+    content = [CONTENT_TYPES_HEAD]
+    content.append(
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="%s"/>'
+        % WORKSHEET_CONTENT_TYPE
+    )
+    content.append(
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="%s"/>' % SST_CONTENT_TYPE
+    )
+    content.append(
+        '<Override PartName="/xl/styles.xml" ContentType="%s"/>' % STYLES_CONTENT_TYPE
+    )
+    content.append(CONTENT_TYPES_TAIL)
+    workbook, rels = workbook_xml(["Big"])
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="%s">%s'
+        '<Relationship Id="rIdSst" Type="%s/sharedStrings" Target="sharedStrings.xml"/>'
+        '<Relationship Id="rIdStyles" Type="%s/styles" Target="styles.xml"/>'
+        "</Relationships>" % (RELS_NS, "".join(rels), DOC_REL_NS, DOC_REL_NS)
+    )
+    worksheet_prefix = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+    )
+    worksheet_suffix = "</sheetData></worksheet>"
+
+    def worksheet_chunks():
+        yield '<row r="1">' + "".join(
+            '<c r="%s1" t="inlineStr"><is><t>c%d</t></is></c>' % (column_name(index), index)
+            for index in range(1, cols + 1)
+        ) + "</row>"
+        chunk = []
+        for row in range(2, rows + 1):
+            cells = ['<c r="A%d"><v>%d</v></c>' % (row, row - 1)]
             for col in range(2, cols + 1):
-                values.append("%d" % (row * col))
-            handle.write(",".join(values) + "\n")
+                if col == 2:
+                    cells.append(
+                        '<c r="%s%d" t="s"><v>%d</v></c>'
+                        % (column_name(col), row, (row - 2) % len(shared))
+                    )
+                elif col == 3:
+                    cells.append(
+                        '<c r="%s%d"><v>%.3f</v></c>' % (column_name(col), row, row * 0.5)
+                    )
+                elif col == 4:
+                    cells.append(
+                        '<c r="%s%d" t="b"><v>%d</v></c>' % (column_name(col), row, row % 2)
+                    )
+                else:
+                    cells.append(
+                        '<c r="%s%d"><v>%d</v></c>' % (column_name(col), row, row * col)
+                    )
+            chunk.append('<row r="%d">%s</row>' % (row, "".join(cells)))
+            if len(chunk) >= 4096:
+                yield "".join(chunk)
+                chunk = []
+        if chunk:
+            yield "".join(chunk)
+
+    parts = [
+        ("[Content_Types].xml", "".join(content)),
+        (
+            "_rels/.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="%s"><Relationship Id="rId1" Type="%s/officeDocument" '
+            'Target="xl/workbook.xml"/></Relationships>' % (RELS_NS, DOC_REL_NS),
+        ),
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", workbook_rels),
+        ("xl/sharedStrings.xml", shared_strings_xml(shared)),
+        ("xl/styles.xml", styles_xml({164: "yyyy-mm-dd", 165: "yyyy-mm-dd hh:mm:ss"})),
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, text in parts:
+            info = zipfile.ZipInfo(name, date_time=FIXED_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, text.encode("utf-8"))
+        info = zipfile.ZipInfo("xl/worksheets/sheet1.xml", date_time=FIXED_DATE)
+        info.compress_type = zipfile.ZIP_DEFLATED
+        with archive.open(info, "w", force_zip64=True) as handle:
+            handle.write(worksheet_prefix.encode("utf-8"))
+            for chunk in worksheet_chunks():
+                handle.write(chunk.encode("utf-8"))
+            handle.write(worksheet_suffix.encode("utf-8"))
+    if with_csv:
+        with open(os.path.splitext(path)[0] + ".csv", "w", encoding="utf-8",
+                  newline="") as handle:
+            handle.write(",".join("c%d" % index for index in range(1, cols + 1)) + "\n")
+            for row in range(1, rows):
+                values = [str(row)]
+                for col in range(2, cols + 1):
+                    values.append("%d" % (row * col))
+                handle.write(",".join(values) + "\n")
     print("big fixtures written to %s" % out_dir)
 
 
@@ -916,9 +989,11 @@ def main():
     parser.add_argument("--big", default=None)
     parser.add_argument("--rows", type=int, default=200000)
     parser.add_argument("--cols", type=int, default=8)
+    parser.add_argument("--no-csv", action="store_true",
+                        help="skip the CSV twin of --big (useful for very large fixtures)")
     args = parser.parse_args()
     if args.big:
-        make_big(args.big, args.rows, args.cols)
+        make_big(args.big, args.rows, args.cols, with_csv=not args.no_csv)
     else:
         make_fixtures(args.out)
 
