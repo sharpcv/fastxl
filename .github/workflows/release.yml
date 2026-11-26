@@ -53,21 +53,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-dev pybind11-dev
 
-      - name: Build CLI, Python module and C SDK
+      - name: Build CLI and Python module
         run: |
           xmake f -y -m release
-          xmake build -y fastxl-cli fastxl-python fastxl-c
+          xmake build -y fastxl-cli fastxl-python
 
       - name: Package
         run: |
           python3 projects/tools/stage_skill.py
           python3 projects/tools/package_release.py
-          python3 projects/tools/package_sdk.py
 
       - uses: actions/upload-artifact@v4
         with:
           name: fastxl-linux-${{ matrix.arch }}
           path: build/fastxl-*.zip
+          if-no-files-found: error
+
+  # The C ABI SDK must load on glibc 2.28+ hosts, so it is built inside the
+  # manylinux_2_28 image instead of the runner's Ubuntu. The host job above
+  # stays on the runner for the CLI and the version-specific pybind11 module.
+  sdk-linux:
+    name: sdk-linux-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Build, verify and package the SDK
+        run: bash projects/tools/build_sdk_manylinux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastxl-sdk-linux-${{ matrix.arch }}
+          path: build/fastxl-sdk-*.zip
           if-no-files-found: error
 
   windows:

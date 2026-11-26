@@ -85,6 +85,18 @@ jobs:
           python3 projects/tests/test_c_abi.py
           python3 projects/tools/package_sdk.py
 
+  # Gate the released Linux SDK artifact: it must stay loadable on glibc 2.28
+  # hosts, which only a manylinux_2_28 build can guarantee.
+  sdk-manylinux:
+    name: sdk-manylinux-x86_64
+    runs-on: ubuntu-24.04
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, verify and package the SDK
+        run: bash projects/tools/build_sdk_manylinux.sh
+
   sanitizers:
     name: linux-sanitizers
     runs-on: ubuntu-24.04

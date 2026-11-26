@@ -34,7 +34,12 @@ else
     add_cxflags("-fvisibility=hidden", "-fvisibility-inlines-hidden")
     if is_plat("linux") then
         add_cxflags("-pthread")
+        -- The SDK ships as a single .so: fold libstdc++/libgcc in so the
+        -- binary has no GLIBCXX_*/GCC_* symbol-version floor (the glibc floor
+        -- is set by the build image, see the manylinux job in release.yml).
         add_shflags("-pthread",
+                    "-static-libstdc++",
+                    "-static-libgcc",
                     "-Wl,--exclude-libs,ALL",
                     "-Wl,--version-script=" .. path.join(os.projectdir(),
                                                         "projects/fastxl-c/fastxl.map"),

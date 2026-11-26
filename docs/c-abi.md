@@ -85,6 +85,17 @@ payload like the CLI `--max-bytes` flag. Status `0` is success; any other value
 is `1 + fastxl::ErrorCode` and maps to a stable name via
 `fastxl_error_name()`.
 
+## Linux compatibility
+
+`libfastxl.so` is built inside `quay.io/pypa/manylinux_2_28_<arch>`, so it only
+needs **glibc 2.28+** and nothing else: libstdc++ and libgcc are linked into
+the shared object, and `ldd` lists just `libc`, `libm` and the loader. That
+covers Ubuntu 20.04+, Debian 10+, RHEL/Rocky/Alma 8+ and the `python:*-slim`
+images. The release workflow runs `projects/tools/build_sdk_manylinux.sh`, and
+`projects/tools/check_sdk_symbols.py` fails the build if a newer `GLIBC_*`
+symbol or a dynamic libstdc++/libgcc reference shows up — building on a current
+distro (Ubuntu 24.04) would require `GLIBC_2.38` and break older hosts.
+
 ## ABI stability
 
 `fastxl_abi_version()` is `1`. Fields are added through options JSON, so a new

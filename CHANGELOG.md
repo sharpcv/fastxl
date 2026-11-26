@@ -46,6 +46,12 @@ and only adds optional fields within a major version.
 
 ### Changed
 
+- The Linux `libfastxl.so` is built from `manylinux_2_28` and links libstdc++
+  and libgcc statically: it now requires only glibc 2.28 and has no
+  `GLIBCXX_*`/`GCC_*` symbol versions, so the same SDK loads on RHEL/Rocky/Alma
+  8+, Debian 10+, Ubuntu 20.04+ and `python:*-slim` images. The release
+  workflow builds it with `projects/tools/build_sdk_manylinux.sh` and gates it
+  with `projects/tools/check_sdk_symbols.py`; CI runs the same job.
 - Linux package builds of minizip-ng and zlib-ng enable
   `CMAKE_POSITION_INDEPENDENT_CODE` so they can be linked into the shared SDK.
 - Version is `1.3.0` across `xmake.lua`, the CLI, the Python package, the skill
