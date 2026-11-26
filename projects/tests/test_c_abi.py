@@ -58,10 +58,12 @@ def load_bindings():
 
 
 def cli_json(cli, arguments):
+    # text=True decodes with the locale code page (cp1252 on Windows), which
+    # mangles the UTF-8 JSON and breaks parity against ctypes.
     result = subprocess.run(
         [str(cli)] + arguments + ["--format", "jsonl"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
         raise SystemExit("cli failed: %s\n%s" % (" ".join(arguments), result.stderr))
