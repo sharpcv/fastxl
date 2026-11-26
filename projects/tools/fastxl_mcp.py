@@ -7,14 +7,14 @@ Exposes read-only spreadsheet probes as MCP tools:
 The server is native-first: when the compiled ``fastxl`` module is importable it
 answers in-process through ``fastxl.Session``, which keeps the parsed workbook
 cached across calls. Otherwise, or when ``FASTXL_FORCE_CLI=1`` is set, it shells
-out to ``fastxl-cli``.
+out to ``fastxl`` (falling back to a legacy ``fastxl-cli``).
 
 Usage:
     python projects/tools/fastxl_mcp.py
-    python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli
+    python projects/tools/fastxl_mcp.py --cli build/bin/fastxl
     FASTXL_FORCE_CLI=1 python projects/tools/fastxl_mcp.py
 
-(``fastxl-cli.exe`` on Windows.)
+(``fastxl.exe`` on Windows.)
 
 If --cli is omitted, FASTXL_CLI is used, then build/bin, then PATH. The server
 speaks newline-delimited JSON-RPC 2.0 on stdin/stdout;
@@ -55,14 +55,17 @@ def find_cli(explicit):
     if env:
         return Path(env)
     for candidate in (
+        ROOT / "build" / "bin" / "fastxl.exe",
+        ROOT / "build" / "bin" / "fastxl",
         ROOT / "build" / "bin" / "fastxl-cli.exe",
         ROOT / "build" / "bin" / "fastxl-cli",
     ):
         if candidate.exists():
             return candidate
-    found = shutil.which("fastxl-cli")
-    if found:
-        return Path(found)
+    for name in ("fastxl", "fastxl-cli"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
     return None
 
 
@@ -364,7 +367,7 @@ TOOL_SCHEMAS = {
 
 def cli_call(cli, name, arguments):
     if cli is None:
-        return None, "fastxl-cli not found; pass --cli, set FASTXL_CLI, or build the native module"
+        return None, "fastxl not found; pass --cli, set FASTXL_CLI, or build the native module"
     try:
         args = common_args(arguments, "info" if name == "fastxl_info" else name[len("fastxl_"):])
         result = subprocess.run([str(cli), *args], capture_output=True)
@@ -402,7 +405,7 @@ def handle(cli, message):
             "capabilities": {"tools": {}},
             "serverInfo": {
                 "name": "fastxl",
-                "version": "1.3.1",
+                "version": "1.3.2",
                 "mode": "native" if SESSION is not None else "cli",
             },
         }
@@ -433,11 +436,11 @@ def handle(cli, message):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cli", default=None, help="fastxl-cli path for the fallback")
+    parser.add_argument("--cli", default=None, help="fastxl CLI path for the fallback")
     parser.add_argument(
         "--cli-only",
         action="store_true",
-        help="always shell out to fastxl-cli instead of using the native module",
+        help="always shell out to the fastxl CLI instead of using the native module",
     )
     args = parser.parse_args()
     global SESSION

@@ -29,7 +29,7 @@ echo "cc: $(cc --version | head -1)"
 echo "python: $("$PYTHON" --version)"
 
 xmake f -y -m release
-xmake build -y fastxl-c
+xmake build -y fastxl
 
 # Strip before packaging: the .so is dlopen'ed by ctypes, not debugged.
 strip --strip-unneeded build/lib/libfastxl.so
@@ -37,8 +37,8 @@ strip --strip-unneeded build/lib/libfastxl.so
 
 "$PYTHON" projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
 mkdir -p build/c-abi-tmp
-cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
-  projects/fastxl-c/tests/test_c_abi.c \
+cc -std=c11 -Wall -Wextra -Iprojects/libfastxl/include \
+  projects/tests/c_abi/test_c_abi.c \
   -Lbuild/lib -lfastxl -Wl,-rpath,"$PWD/build/lib" -o build/test_c_abi
 build/test_c_abi projects/tests/fixtures/basic.xlsx build/c-abi-tmp
 
@@ -49,14 +49,15 @@ build/test_c_abi projects/tests/fixtures/basic.xlsx build/c-abi-tmp
 # import it only from the wheel target directory.
 FIXTURE="$PWD/projects/tests/fixtures/basic.xlsx"
 WHEEL_TEST=$(mktemp -d)
-"$PYTHON" -m pip install --quiet --no-deps --target "$WHEEL_TEST/pkg" build/wheelhouse/fastxl_ctypes-*.whl
+"$PYTHON" -m pip install --quiet --no-deps --target "$WHEEL_TEST/pkg" build/wheelhouse/fastxl-*.whl
 (
   cd "$WHEEL_TEST"
   PYTHONPATH="$WHEEL_TEST/pkg" "$PYTHON" -c "
-import fastxl_ctypes, sys
-schema = fastxl_ctypes.schema(sys.argv[1])
+import fastxl, sys
+assert fastxl.__backend__ == 'ctypes', fastxl.__backend__
+schema = fastxl.schema(sys.argv[1])
 assert schema['ok'] is True, schema
-print('wheel ok:', fastxl_ctypes.version(), fastxl_ctypes.__file__)
+print('wheel ok:', fastxl.version(), fastxl.__file__)
 " "$FIXTURE"
 )
 rm -rf "$WHEEL_TEST"

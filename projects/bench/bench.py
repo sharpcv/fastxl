@@ -5,7 +5,7 @@ Measures what an agent pays per probe on the generated fixtures, which is a
 different question from the raw streaming throughput in ``perf_suite.py`` and
 ``bench.cpp``:
 
-* ``cli``      one ``fastxl-cli`` process per call (what MCP did before M7);
+* ``cli``      one ``fastxl`` process per call (what MCP did before M7);
 * ``budget``   the same call with ``--max-bytes`` so the output is folded;
 * ``native``   one in-process ``fastxl`` call (cold);
 * ``session``  a second call through ``fastxl.Session`` (warm cache).
@@ -49,14 +49,14 @@ def find_cli(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit)
     for candidate in (
-        ROOT / "build" / "bin" / "fastxl-cli",
-        ROOT / "build" / "bin" / "fastxl-cli.exe",
-        ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl-cli",
-        ROOT / "build" / "windows" / "x64" / "release" / "fastxl-cli.exe",
+        ROOT / "build" / "bin" / "fastxl",
+        ROOT / "build" / "bin" / "fastxl.exe",
+        ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl",
+        ROOT / "build" / "windows" / "x64" / "release" / "fastxl.exe",
     ):
         if candidate.exists():
             return candidate
-    raise SystemExit("fastxl-cli not found; build it with `xmake build -y fastxl-cli`")
+    raise SystemExit("fastxl not found; build it with `xmake build -y fastxl_cli`")
 
 
 def ensure_fixtures(fixture: Path) -> None:
@@ -127,7 +127,7 @@ def cli_runner(cli: Path, args: list[str]) -> Callable[[], None]:
         result = subprocess.run([str(cli), *args], capture_output=True)
         if result.returncode != 0:
             raise SystemExit(
-                "fastxl-cli %s failed (%d): %s"
+                "fastxl %s failed (%d): %s"
                 % (" ".join(args), result.returncode,
                    result.stderr.decode("utf-8", "replace")[:200])
             )
@@ -217,7 +217,7 @@ def print_table(rows: list[dict[str, Any]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--cli", default=None, help="fastxl-cli path")
+    parser.add_argument("--cli", default=None, help="fastxl path")
     parser.add_argument("--fixture", default=None,
                         help="workbook to probe (default: fixtures/large.xlsx)")
     parser.add_argument("--runs", type=int, default=5)

@@ -20,15 +20,15 @@ sys.path.insert(0, str(ROOT / "build" / "python"))
 try:
     import fastxl
 except Exception as error:  # pragma: no cover - diagnostic path
-    raise SystemExit("cannot import build/python/fastxl (run xmake build -y fastxl-python): %s" % error)
+    raise SystemExit("cannot import build/python/fastxl (run xmake build -y fastxl_python): %s" % error)
 
 CLI_CANDIDATES = [
-    ROOT / "build" / "bin" / "fastxl-cli.exe",
-    ROOT / "build" / "bin" / "fastxl-cli",
-    ROOT / "build" / "windows" / "x64" / "release" / "fastxl-cli.exe",
-    ROOT / "build" / "windows" / "x64" / "debug" / "fastxl-cli.exe",
-    ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl-cli",
-    ROOT / "build" / "linux" / "x86_64" / "debug" / "fastxl-cli",
+    ROOT / "build" / "bin" / "fastxl.exe",
+    ROOT / "build" / "bin" / "fastxl",
+    ROOT / "build" / "windows" / "x64" / "release" / "fastxl.exe",
+    ROOT / "build" / "windows" / "x64" / "debug" / "fastxl.exe",
+    ROOT / "build" / "linux" / "x86_64" / "release" / "fastxl",
+    ROOT / "build" / "linux" / "x86_64" / "debug" / "fastxl",
 ]
 
 
@@ -36,7 +36,7 @@ def find_cli():
     for candidate in CLI_CANDIDATES:
         if candidate.is_file():
             return candidate
-    raise SystemExit("fastxl-cli not found; build it or pass --cli")
+    raise SystemExit("fastxl not found; build it or pass --cli")
 
 
 def median_native(function, runs):

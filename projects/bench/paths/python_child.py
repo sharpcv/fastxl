@@ -8,6 +8,7 @@ separate process so imports and allocator state never leak between samples.
 import argparse
 import importlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -23,11 +24,13 @@ def peak_mb():
 
 
 def load(impl):
-    if impl == "pybind":
-        sys.path.insert(0, str(ROOT / "build" / "python"))
-        return importlib.import_module("fastxl")
-    sys.path.insert(0, str(ROOT / "build" / "lib"))
-    return importlib.import_module("fastxl_ctypes")
+    if impl == "ctypes":
+        os.environ["FASTXL_BACKEND"] = "ctypes"
+    for candidate in (ROOT / "build" / "python", ROOT / "bindings" / "python"):
+        if (candidate / "fastxl").is_dir():
+            sys.path.insert(0, str(candidate))
+            break
+    return importlib.import_module("fastxl")
 
 
 def main():
@@ -51,14 +54,9 @@ def main():
         if base == "info":
             payload = session.info(args.file) if session is not None else fastxl.info(args.file)
         elif base == "preview":
-            if args.impl == "pybind":
-                payload = (session.preview_sheet(args.file, rows=2000)
-                           if session is not None
-                           else fastxl.preview_sheet(args.file, rows=2000))
-            else:
-                payload = (session.preview(args.file, rows=2000)
-                           if session is not None
-                           else fastxl.preview(args.file, rows=2000))
+            payload = (session.preview(args.file, rows=2000)
+                       if session is not None
+                       else fastxl.preview(args.file, rows=2000))
         elif base == "schema":
             payload = (session.schema(args.file) if session is not None
                        else fastxl.schema(args.file))
@@ -70,20 +68,16 @@ def main():
                        if session is not None
                        else fastxl.search(args.file, "invoice", max_hits=100))
         elif base == "read_rows":
+            if args.impl == "ctypes":
+                raise SystemExit("read_rows is only implemented by the native backend")
             payload = fastxl.read_rows(args.file, limit=0)
             rows = len(payload["rows"])
         elif base == "iter":
-            if args.impl == "pybind":
-                with fastxl.iter_rows(args.file, as_tuples=True) as iterator:
-                    for _ in iterator:
-                        rows += 1
-            else:
-                with fastxl.iter_rows(args.file) as iterator:
-                    for _ in iterator:
-                        rows += 1
+            with fastxl.iter_rows(args.file, shape="arrays") as iterator:
+                for _ in iterator:
+                    rows += 1
         elif base == "convert":
-            importlib.import_module("fastxl" if args.impl == "pybind"
-                                    else "fastxl_ctypes").convert(args.file, args.extra)
+            fastxl.convert(args.file, args.extra)
         else:
             raise SystemExit("unknown op " + base)
 

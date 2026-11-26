@@ -56,13 +56,13 @@ jobs:
       - name: Build CLI and Python module
         run: |
           xmake f -y -m release
-          xmake build -y fastxl-cli fastxl-python
+          xmake build -y fastxl_cli fastxl_python
 
       - name: Package
         run: |
           # Shrink the shipped CLI/extension; ctypes hosts never load debug
           # symbols and the release zip is downloaded by end users.
-          strip --strip-unneeded build/bin/fastxl-cli
+          strip --strip-unneeded build/bin/fastxl
           strip --strip-unneeded build/python/fastxl/_fastxl.so
           python3 projects/tools/stage_skill.py
           python3 projects/tools/package_release.py
@@ -145,7 +145,7 @@ jobs:
       - name: Build and package
         shell: pwsh
         run: |
-          xmake build -y fastxl-cli fastxl-python fastxl-c
+          xmake build -y fastxl_cli fastxl_python fastxl
           python projects/tools/stage_skill.py
           python projects/tools/package_release.py
           python projects/tools/package_sdk.py
@@ -179,7 +179,7 @@ jobs:
             mv -f wheelhouse/*.whl .
             rm -rf wheelhouse
           fi
-          sha256sum fastxl-*.zip fastxl_ctypes-*.whl > SHA256SUMS.txt
+          sha256sum fastxl-*.zip fastxl-*.whl > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Upload to GitHub Release

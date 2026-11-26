@@ -16,15 +16,8 @@ __pycache__/
 *.pyc
 *.exp
 
-# Test and benchmark sources are shipped so CI can run them; the generated
-# fixtures and benchmark data stay local (recreate with gen_fixtures.py).
-projects/tests/*
-!projects/tests/xmake.lua
-!projects/tests/*.cpp
-!projects/tests/*.hpp
-!projects/tests/*.py
-!projects/tests/*.supp
-!projects/tests/fixtures/
+# Test sources ship so CI can run them; generated fixtures and benchmark data
+# stay local (recreate with gen_fixtures.py).
 projects/tests/fixtures/*
 !projects/tests/fixtures/gen_fixtures.py
 

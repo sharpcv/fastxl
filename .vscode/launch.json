@@ -2,22 +2,22 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run fastxl-cli --version (MSVC)",
+      "name": "Run fastxl --version (MSVC)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/bin/fastxl-cli.exe",
+      "program": "${workspaceFolder}/build/bin/fastxl.exe",
       "args": ["--version"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [],
       "console": "integratedTerminal",
-      "preLaunchTask": "xmake: build fastxl-cli (debug)"
+      "preLaunchTask": "xmake: build fastxl (debug)"
     },
     {
-      "name": "Run fastxl-cli --version (gdb)",
+      "name": "Run fastxl --version (gdb)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/bin/fastxl-cli",
+      "program": "${workspaceFolder}/build/bin/fastxl",
       "args": ["--version"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
@@ -31,7 +31,7 @@
           "ignoreFailures": true
         }
       ],
-      "preLaunchTask": "xmake: build fastxl-cli (debug)"
+      "preLaunchTask": "xmake: build fastxl (debug)"
     }
   ]
 }

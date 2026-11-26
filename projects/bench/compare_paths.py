@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Compare the three fastxl entry paths: C++ core, C ABI and Python bindings.
 
-* native  — fastxl-bench-paths-native, links fastxl-core directly;
+* native  — fastxl-bench-paths-native, links fastxl_core directly;
 * abi     — fastxl-bench-paths-abi, links libfastxl.so through fastxl_c.h;
 * pybind  — build/python fastxl, the native extension module;
-* ctypes  — build/lib/fastxl_ctypes over the same C ABI library.
+* ctypes  — the same wheel/SDK library through fastxl's ctypes backend.
 
 Every sample is a fresh process; the reported ms excludes interpreter startup
 and import time, and peak RSS is that child's VmHWM. The Python samples include
@@ -113,6 +113,7 @@ def main():
                         help="measured runs for the 200k-row cases (default 3)")
     parser.add_argument("--write", help="write the markdown report to this path")
     args = parser.parse_args()
+    (ROOT / "build" / "reports").mkdir(parents=True, exist_ok=True)
 
     native = find_binary("fastxl-bench-paths-native")
     abi = find_binary("fastxl-bench-paths-abi")

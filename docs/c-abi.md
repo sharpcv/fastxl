@@ -10,11 +10,13 @@ fastxl-sdk-<version>/
   include/fastxl_c.h       C11 declarations
   include/fastxl_cxx.hpp   header-only C++20 RAII wrapper
   lib/libfastxl.so         or fastxl.dll + fastxl.lib
-  python/fastxl_ctypes/    pure-ctypes Python package
   docs/c-abi.md
   LICENSE
   THIRD_PARTY_NOTICES.txt
 ```
+
+The Python package ships separately as a version-independent wheel
+(`fastxl-<version>-py3-none-<plat>.whl`) with the shared library bundled.
 
 ## C
 
@@ -54,7 +56,7 @@ fastxl::cxx::convert("book.xlsx", "book.csv", R"({"sheet":"Data"})").value();
 ## Python
 
 ```python
-import fastxl_ctypes as fastxl
+import fastxl
 
 with fastxl.Session() as session:
     schema = session.schema("book.xlsx", header_row="auto")
@@ -82,14 +84,17 @@ pybind11 module.
 Release assets include one version-independent wheel per platform:
 
 ```text
-fastxl_ctypes-<version>-py3-none-manylinux_2_28_x86_64.whl
-fastxl_ctypes-<version>-py3-none-manylinux_2_28_aarch64.whl
-fastxl_ctypes-<version>-py3-none-win_amd64.whl
+fastxl-<version>-py3-none-manylinux_2_28_x86_64.whl
+fastxl-<version>-py3-none-manylinux_2_28_aarch64.whl
+fastxl-<version>-py3-none-win_amd64.whl
 ```
 
 Each wheel bundles `libfastxl.so` / `fastxl.dll` in the package directory, so
-`pip install ./fastxl_ctypes-…whl` works on CPython 3.8–3.15 (free-threaded
-included) and PyPy without `FASTXL_LIBRARY` or a compiler. `pip` selects the
+`pip install ./fastxl-…whl` works on CPython 3.8–3.15 (free-threaded included)
+and PyPy without `FASTXL_LIBRARY` or a compiler. The package prefers the native
+`_fastxl` extension when it is installed for the running interpreter and falls
+back to the bundled ctypes library; `fastxl.__backend__` reports which one is
+active, and `FASTXL_BACKEND=ctypes|native` forces one. `pip` selects the
 manylinux wheel only on glibc 2.28+ systems. Build them with
 `projects/tools/package_wheel.py`; the Linux wheels must be built inside
 `manylinux_2_28` (the release job does).

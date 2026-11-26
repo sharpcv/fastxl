@@ -4,6 +4,58 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
+## v1.3.2
+
+Everything is named `fastxl`: the CLI binary is `fastxl` (target `fastxl_cli`),
+the static core is `fastxl_core`, the C ABI shared library stays `fastxl`, and
+the only Python package is `fastxl`.
+
+### Changed
+
+- Merged `fastxl-core`, the shared report builders from the CLI and
+  `fastxl-c` into `projects/libfastxl/` (`src/core`, `src/reports`,
+  `src/c_abi`). `fastxl-c` no longer compiles `../fastxl-cli/src/*.cpp`; the
+  CLI and the C ABI both depend on `fastxl_reports`.
+- The CLI project is `projects/fastxl/` and its product is `fastxl` /
+  `fastxl.exe`; the static library is `libfastxl_core.a` / `fastxl_core.lib`
+  so it cannot collide with the `fastxl.lib` import library.
+- Tests moved to `projects/tests/{cpp,c_abi,python,fixtures}/`.
+- Python is one package, `fastxl`: `__init__.py` routes to the native
+  `_fastxl` extension when it matches the interpreter and otherwise to
+  `_ctypes_backend.py` with the bundled `libfastxl.so` / `fastxl.dll`.
+  `fastxl.__backend__` reports `"native"` or `"ctypes"`; `FASTXL_BACKEND`
+  forces one. The ctypes backend uses `orjson` for JSONL batches when it is
+  installed (no required dependency).
+- Both backends now expose the same functions (`info`, `preview`, `schema`,
+  `probe`, `search`, `convert`, `iter_rows`, `write_rows`), classes
+  (`Session`, `RowIterator`, `JsonlWriter`) and error fields
+  (`code`, `exit_code`, `status`, `message`). Native `convert()` and
+  `JsonlWriter` reuse the same C++ implementations as the C ABI.
+- Release wheels are named `fastxl-<version>-py3-none-<plat>.whl`; the C ABI
+  SDK zip now ships only the library, import library and headers (the Python
+  package is the wheel). `fastxl_error_exit_code()` was added to the C ABI so
+  ctypes errors carry the CLI exit code.
+- MCP and skill CLI discovery prefer `fastxl` and still fall back to a legacy
+  `fastxl-cli` binary.
+
+### Fixed
+
+- `ZipEntryStream::read()` checks `mz_zip_reader_entry_close()` after the last
+  byte, so a CRC mismatch (corrupt or truncated entry) raises `ZipReadError`
+  instead of being ignored by a `noexcept` close.
+- The pybind11 `Session` context manager clears its caches on exit.
+- `FormatKind` distinguishes clock values (`h:mm`, wrapped with
+  `fmod(serial, 1.0)`) from durations (`[h]:mm:ss`, keeping whole days); a
+  `[h]` cell no longer prints a 24h-wrapped time.
+- Writing a formula whose cached result is text emits `t="str"` with an inline
+  `<v>` instead of a shared-string index, and `date_1904` writes
+  `<workbookPr date1904="1"/>` so Excel reads the serials with the right epoch.
+- Schema and probe profiles are cached under separate keys, so a probe never
+  reuses a schema profile computed with per-sheet `jobs=1`.
+- Native option errors (`header_row`, `delimiter`, `write_xlsx` row shapes)
+  raise `fastxl.Error` with `InvalidValue`/`ColumnCountMismatch` like the
+  ctypes backend instead of raw `ValueError`.
+
 ## v1.3.1
 
 1.3.0 was never published; 1.3.1 is the first binary release of the C ABI SDK.

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Build the version-independent ``fastxl_ctypes`` wheel.
+"""Build the version-independent ``fastxl`` wheel.
 
-``fastxl_ctypes`` is pure ctypes and never touches the Python C API, so one
-platform wheel serves CPython 3.8-3.15 (free-threaded builds included) and
-PyPy. The shared library is bundled inside the package, so ``pip install``
-needs no ``FASTXL_LIBRARY`` setup and no per-interpreter rebuild.
+The wheel ships the unified package (``fastxl/__init__.py`` router plus
+``_ctypes_backend.py``) and the shared library. The ctypes backend never touches
+the Python C API, so one wheel serves CPython 3.8-3.15 (free-threaded builds
+included) and PyPy; when a matching native ``_fastxl`` extension is installed it
+is picked up automatically.
 
 Build the Linux wheels inside ``manylinux_2_28`` (release.yml does) so the
 platform tag matches the glibc floor:
 
     python3 projects/tools/package_wheel.py --plat-name manylinux_2_28_x86_64
     python3 projects/tools/package_wheel.py --plat-name win_amd64
-    # -> build/fastxl_ctypes-<version>-py3-none-<plat>.whl
+    # -> build/fastxl-<version>-py3-none-<plat>.whl
 """
 
 import argparse
@@ -25,7 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 LIBRARY_NAMES = ("libfastxl.so", "libfastxl.dylib", "fastxl.dll")
-PACKAGE_DIR = ROOT / "projects" / "fastxl-c" / "python" / "fastxl_ctypes"
+PACKAGE_DIR = ROOT / "bindings" / "python" / "fastxl"
+PACKAGE_FILES = ("__init__.py", "_ctypes_backend.py", "py.typed")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
 
@@ -62,24 +64,26 @@ def find_library(explicit):
         candidate = ROOT / "build" / "lib" / name
         if candidate.is_file():
             return candidate
-    raise SystemExit("missing SDK library; run `xmake build -y fastxl-c` first")
+    raise SystemExit("missing SDK library; run `xmake build -y fastxl` first")
 
 
 def package_files(library):
     files = {}
-    for path in sorted(PACKAGE_DIR.iterdir()):
-        if path.is_file() and (path.suffix == ".py" or path.name == "py.typed"):
-            files["fastxl_ctypes/" + path.name] = path.read_bytes()
-    files["fastxl_ctypes/" + library.name] = library.read_bytes()
+    for name in PACKAGE_FILES:
+        path = PACKAGE_DIR / name
+        if not path.is_file():
+            raise SystemExit("missing package file: %s" % path)
+        files["fastxl/" + name] = path.read_bytes()
+    files["fastxl/" + library.name] = library.read_bytes()
     return files
 
 
 def metadata(version):
     lines = [
         "Metadata-Version: 2.1",
-        "Name: fastxl_ctypes",
+        "Name: fastxl",
         "Version: %s" % version,
-        "Summary: Pure ctypes bindings for the fastxl C ABI",
+        "Summary: Fast Excel/CSV/JSONL probing, conversion and row streaming",
         "Home-page: https://github.com/sharpcv/fastxl",
         "License: MIT",
         "Requires-Python: >=3.8",
@@ -90,9 +94,10 @@ def metadata(version):
         "Description-Content-Type: text/markdown",
         "",
         "One wheel works on CPython 3.8-3.15 (free-threaded included) and PyPy:",
-        "the wrapper is pure ctypes and the shared library is bundled.",
+        "the package routes to the native ``_fastxl`` extension when it is",
+        "installed and otherwise uses the bundled library through ctypes.",
         "",
-        "    import fastxl_ctypes as fastxl",
+        "    import fastxl",
         "    print(fastxl.schema(\"book.xlsx\", header_row=\"auto\"))",
     ]
     return "\n".join(lines) + "\n"
@@ -104,9 +109,9 @@ def record_hash(data):
 
 
 def build(version, platform_tag, library, out_dir):
-    wheel_name = "fastxl_ctypes-%s-py3-none-%s.whl" % (version, platform_tag)
+    wheel_name = "fastxl-%s-py3-none-%s.whl" % (version, platform_tag)
     output = Path(out_dir) / wheel_name
-    dist_info = "fastxl_ctypes-%s.dist-info" % version
+    dist_info = "fastxl-%s.dist-info" % version
 
     entries = dict(package_files(library))
     entries[dist_info + "/METADATA"] = metadata(version).encode("utf-8")

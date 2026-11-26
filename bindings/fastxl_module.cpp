@@ -10,8 +10,10 @@
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
 #include "fastxl/detail/json_budget.hpp"
+#include "jsonl_writer.hpp"
 #include "metadata_json.hpp"
 #include "preview_json.hpp"
+#include "reports.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -123,18 +125,24 @@ uint32_t header_value(const py::object& value, bool& header_auto) {
       header_auto = true;
       return 1;
     }
-    size_t consumed = 0;
-    const unsigned long parsed = std::stoul(text, &consumed);
-    if (consumed != text.size()) throw std::invalid_argument("header_row must be an integer or 'auto'");
+    throw Exception(ErrorCode::InvalidValue,
+                    "header_row must be an integer, 0 or 'auto'");
+  }
+  if (py::isinstance<py::int_>(value) && !py::isinstance<py::bool_>(value)) {
+    const int64_t parsed = py::cast<int64_t>(value);
+    if (parsed < 0 || parsed > 1048576)
+      throw Exception(ErrorCode::InvalidValue, "header_row is out of range");
     return static_cast<uint32_t>(parsed);
   }
-  return py::cast<uint32_t>(value);
+  throw Exception(ErrorCode::InvalidValue,
+                  "header_row must be an integer, 0 or 'auto'");
 }
 
 char delimiter_value(const std::string& value) {
   if (value.empty()) return '\0';
   if (value == "\\t") return '\t';
-  if (value.size() != 1) throw std::invalid_argument("delimiter must be one character");
+  if (value.size() != 1)
+    throw Exception(ErrorCode::InvalidValue, "delimiter must be one character");
   return value[0];
 }
 
@@ -535,9 +543,11 @@ ProfileOptions profile_options(const ProbeArgs& args) {
   return options;
 }
 
-std::string profile_key(const std::string& file_key, Format format, const ProbeArgs& args,
-                        size_t sheet_index) {
-  std::string key = file_key;
+std::string profile_key(const char* kind, const std::string& file_key, Format format,
+                        const ProbeArgs& args, size_t sheet_index) {
+  std::string key;
+  append_key_field(key, std::string(kind));
+  key += file_key;
   append_key_field(key, std::string(to_string(format)));
   append_key_field(key, uint64_t{sheet_index});
   append_key_field(key, std::string(args.sheet));
@@ -579,8 +589,8 @@ struct ProbeBuild {
   std::vector<DefinedName> defined_names;
 };
 
-ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr,
-                         ProfileCache* cache = nullptr) {
+ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached,
+                         ProfileCache* cache, const char* kind) {
   const Format format = resolve_format(args.file, args.format);
   const std::filesystem::path path = utf8_path(args.file);
   ProfileOptions options = profile_options(args);
@@ -593,7 +603,7 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
     const WorkBook& workbook = cached != nullptr ? *cached : *opened;
     const size_t index = resolve_sheet_index(workbook, args.sheet);
     const std::string key =
-        cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, index);
+        cache == nullptr ? std::string{} : profile_key(kind, stamp.key, format, args, index);
     if (cache != nullptr) {
       if (cache->find_profile(key, build.profile)) {
         build.profile.file = args.file;
@@ -619,7 +629,7 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
     throw Exception(ErrorCode::UnsupportedFormat, "probe supports xlsx, csv and jsonl");
 
   const std::string key =
-      cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, 0);
+      cache == nullptr ? std::string{} : profile_key(kind, stamp.key, format, args, 0);
   if (cache != nullptr) {
     if (cache->find_profile(key, build.profile)) {
       build.profile.file = args.file;
@@ -732,7 +742,7 @@ ProbeArgs make_probe_args(const std::string& file, py::object sheet, py::object 
 
 Json probe_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
                 ProfileCache* cache = nullptr) {
-  ProbeBuild build = build_profile(args, cached, cache);
+  ProbeBuild build = build_profile(args, cached, cache, "probe");
   Json root = profile_json(build.profile);
   root["header_auto"] = args.header_auto;
   root["defined_names"] = fastxl_cli::defined_names_json(build.defined_names);
@@ -804,7 +814,7 @@ Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
     const FileStamp stamp = cache == nullptr ? FileStamp{} : stat_file(utf8_path(args.file));
     if (cache != nullptr) {
       for (size_t i = 0; i < indices.size(); ++i) {
-        keys[i] = profile_key(stamp.key, resolved, args, indices[i]);
+        keys[i] = profile_key("schema", stamp.key, resolved, args, indices[i]);
         if (cache->find_profile(keys[i], profiles[i])) continue;
         missing.push_back(i);
       }
@@ -864,7 +874,7 @@ Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
       sheets.push_back(std::move(section));
     }
   } else if (resolved == Format::Csv || resolved == Format::Jsonl) {
-    SheetProfile profile = build_profile(args, nullptr, cache).profile;
+    SheetProfile profile = build_profile(args, nullptr, cache, "schema").profile;
     sheets.push_back(schema_section_json(args.sheet.empty() ? "table" : args.sheet, 0, {},
                                          profile));
   } else {
@@ -1454,11 +1464,13 @@ size_t write_xlsx(const std::string& file, py::object rows, py::object columns,
   } else if (!row_list.empty()) {
     const py::object first = row_list[0];
     if (!py::isinstance<py::dict>(first))
-      throw std::invalid_argument("columns is required when rows are not dicts");
+      throw Exception(ErrorCode::ColumnCountMismatch,
+                      "columns are required when rows are not dicts");
     std::unordered_set<std::string> seen;
     for (py::handle raw : row_list) {
       if (!py::isinstance<py::dict>(raw))
-        throw std::invalid_argument("dict and sequence rows cannot be mixed");
+        throw Exception(ErrorCode::InvalidValue,
+                        "dict and sequence rows cannot be mixed");
       for (auto item : py::cast<py::dict>(raw)) {
         const std::string key = py::cast<std::string>(item.first);
         if (seen.insert(key).second) names.push_back(key);
@@ -1884,8 +1896,130 @@ private:
   uint64_t search_misses_ = 0;
 };
 
-PyObject* error_type = nullptr;
+fastxl_cli::JsonlWriterOptions writer_options(const std::string& dst, const py::object& columns,
+                                              const std::string& format, bool header,
+                                              const std::string& delimiter, bool crlf, bool bom,
+                                              bool fsync, const std::string& sheet_name,
+                                              int compression_level) {
+  fastxl_cli::JsonlWriterOptions options;
+  options.dst = dst;
+  options.format = resolve_format(dst, format);
+  options.header = header;
+  options.delimiter = delimiter_value(delimiter);
+  options.crlf = crlf;
+  options.bom = bom;
+  options.fsync = fsync;
+  options.sheet_name = sheet_name;
+  options.compression_level = compression_level;
+  if (!columns.is_none()) {
+    if (!py::isinstance<py::list>(columns) && !py::isinstance<py::tuple>(columns))
+      throw Exception(ErrorCode::InvalidValue, "columns must be a list of strings");
+    std::vector<std::string> names;
+    for (const py::handle item : py::reinterpret_borrow<py::iterable>(columns)) {
+      if (!py::isinstance<py::str>(item))
+        throw Exception(ErrorCode::InvalidValue, "columns must contain strings");
+      names.push_back(py::cast<std::string>(item));
+    }
+    if (names.empty())
+      throw Exception(ErrorCode::InvalidValue, "columns must not be empty");
+    std::vector<std::string_view> views;
+    views.reserve(names.size());
+    for (const std::string& name : names) views.emplace_back(name);
+    options.columns = fastxl_cli::unique_names(views);
+  }
+  return options;
+}
 
+// Streaming JSONL writer exposed to Python; the ctypes backend uses the same
+// C++ class through the C ABI, so both write byte-identical files.
+class PyJsonlWriter {
+public:
+  PyJsonlWriter(const std::string& dst, const py::object& columns, const std::string& format,
+                bool header, const std::string& delimiter, bool crlf, bool bom, bool fsync,
+                const std::string& sheet_name, int compression_level)
+      : writer_(writer_options(dst, columns, format, header, delimiter, crlf, bom, fsync,
+                               sheet_name, compression_level)) {}
+
+  void write_jsonl(const std::string& payload) { writer_.write_jsonl(payload); }
+  void finish() { writer_.finish(); }
+
+private:
+  fastxl_cli::JsonlWriter writer_;
+};
+
+void convert_py(const std::string& src, const std::string& dst, const py::kwargs& kwargs) {
+  auto option = [&](const char* key) -> py::object {
+    return kwargs.contains(key) ? py::reinterpret_borrow<py::object>(kwargs[key]) : py::none();
+  };
+  auto string_option = [&](const char* key, std::string fallback = {}) {
+    const py::object value = option(key);
+    if (value.is_none()) return fallback;
+    if (!py::isinstance<py::str>(value))
+      throw Exception(ErrorCode::InvalidValue,
+                      std::string("option '") + key + "' must be a string");
+    return value.cast<std::string>();
+  };
+  auto bool_option = [&](const char* key, bool fallback) {
+    const py::object value = option(key);
+    if (value.is_none()) return fallback;
+    if (!py::isinstance<py::bool_>(value))
+      throw Exception(ErrorCode::InvalidValue,
+                      std::string("option '") + key + "' must be a boolean");
+    return value.cast<bool>();
+  };
+  auto uint_option = [&](const char* key, uint64_t fallback) {
+    const py::object value = option(key);
+    if (value.is_none()) return fallback;
+    if (!py::isinstance<py::int_>(value))
+      throw Exception(ErrorCode::InvalidValue,
+                      std::string("option '") + key + "' must be an integer");
+    const int64_t number = value.cast<int64_t>();
+    if (number < 0)
+      throw Exception(ErrorCode::InvalidValue,
+                      std::string("option '") + key + "' must not be negative");
+    return static_cast<uint64_t>(number);
+  };
+
+  fastxl_cli::Args args;
+  args.command = "convert";
+  args.positional = {src};
+  args.out = dst;
+  args.from = string_option("from", string_option("format"));
+  args.to = string_option("to");
+  args.sheet = string_option("sheet");
+  const py::object header = option("header_row");
+  if (!header.is_none()) {
+    if (py::isinstance<py::str>(header)) {
+      if (header.cast<std::string>() != "auto")
+        throw Exception(ErrorCode::InvalidValue,
+                        "option 'header_row' must be a row number or \"auto\"");
+      args.header_auto = true;
+    } else if (py::isinstance<py::int_>(header)) {
+      const int64_t row = header.cast<int64_t>();
+      if (row < 0 || row > 1048576)
+        throw Exception(ErrorCode::InvalidValue, "option 'header_row' is out of range");
+      args.header_row = static_cast<uint32_t>(row);
+    } else {
+      throw Exception(ErrorCode::InvalidValue,
+                      "option 'header_row' must be a row number or \"auto\"");
+    }
+  }
+  args.infer = bool_option("infer", true);
+  args.delimiter = delimiter_value(string_option("delimiter"));
+  args.fill_gaps = bool_option("fill_gaps", false);
+  args.limit = static_cast<size_t>(uint_option("limit", 0));
+  args.normalize = bool_option("normalize", false);
+  args.columns = string_option("columns");
+  args.crlf = bool_option("crlf", false);
+  args.bom = bool_option("bom", false);
+  args.sheet_name = string_option("sheet_name", "Sheet1");
+  args.compression_level = static_cast<int>(uint_option("compression_level", 6));
+
+  py::gil_scoped_release release;
+  fastxl_cli::convert_report(args);
+}
+
+PyObject* error_type = nullptr;
 void translate_fastxl_error(std::exception_ptr p) {
   try {
     if (p) std::rethrow_exception(p);
@@ -1896,6 +2030,10 @@ void translate_fastxl_error(std::exception_ptr p) {
     if (!instance) return;
     py::object name = py::str(code.data(), code.size());
     PyObject_SetAttrString(instance.ptr(), "code", name.ptr());
+    PyObject_SetAttrString(instance.ptr(), "name", name.ptr());
+    PyObject_SetAttrString(instance.ptr(), "message", py::str(e.what()).ptr());
+    PyObject_SetAttrString(instance.ptr(), "status",
+                           py::int_(static_cast<int32_t>(e.code()) + 1).ptr());
     py::object exit_code = py::int_(fastxl::exit_code(e.code()));
     PyObject_SetAttrString(instance.ptr(), "exit_code", exit_code.ptr());
     PyErr_SetObject(error_type, instance.ptr());
@@ -1907,7 +2045,7 @@ void translate_fastxl_error(std::exception_ptr p) {
 PYBIND11_MODULE(_fastxl, m) {
   m.doc() =
       "Native fastxl bindings: info, schema, probe, preview, read_rows, iter_rows, "
-      "search, write_xlsx and a caching Session";
+      "search, convert, write_xlsx, JsonlWriter and a caching Session";
   m.attr("__version__") = FASTXL_VERSION;
   m.attr("__build_python__") = py::make_tuple(PY_MAJOR_VERSION, PY_MINOR_VERSION);
   py::exception<fastxl::Exception> error(m, "Error", PyExc_RuntimeError);
@@ -1992,6 +2130,31 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("header") = true, py::arg("compression_level") = 6,
         "Write dicts or sequences to an xlsx workbook atomically.");
 
+  m.def("convert", &convert_py, py::arg("src"), py::arg("dst"),
+        "Convert xlsx/csv/jsonl in place of the CLI; options match fastxl_convert "
+        "(from, to, sheet, header_row, infer, delimiter, fill_gaps, limit, normalize, "
+        "columns, crlf, bom, sheet_name, compression_level).");
+  py::class_<PyJsonlWriter>(m, "JsonlWriter",
+                            "Streaming writer shared with the C ABI: append JSONL batches "
+                            "(objects or arrays), then finish() to publish atomically.")
+      .def(py::init<const std::string&, const py::object&, const std::string&, bool,
+                    const std::string&, bool, bool, bool, const std::string&, int>(),
+           py::arg("dst"), py::arg("columns") = py::none(), py::arg("format") = "",
+           py::arg("header") = true, py::arg("delimiter") = "", py::arg("crlf") = false,
+           py::arg("bom") = false, py::arg("fsync") = true,
+           py::arg("sheet_name") = "Sheet1", py::arg("compression_level") = 6)
+      .def("write_jsonl",
+           [](PyJsonlWriter& self, const std::string& payload) {
+             py::gil_scoped_release release;
+             self.write_jsonl(payload);
+           },
+           py::arg("payload"))
+      .def("finish",
+           [](PyJsonlWriter& self) {
+             py::gil_scoped_release release;
+             self.finish();
+           });
+
   py::class_<Session>(m, "Session",
                       "Caches opened workbooks, sheet profiles and repeated search "
                       "payloads for repeated probes; entries expire when the file's "
@@ -2056,5 +2219,7 @@ PYBIND11_MODULE(_fastxl, m) {
       .def("__len__", &Session::size)
       .def("__enter__", [](py::object self) { return self; })
       .def("__exit__",
-           [](py::object, const py::object&, const py::object&, const py::object&) {});
+           [](Session& self, const py::object&, const py::object&, const py::object&) {
+             self.clear();
+           });
 }

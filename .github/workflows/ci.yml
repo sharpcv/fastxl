@@ -47,7 +47,7 @@ jobs:
         run: xmake f -y -m release
 
       - name: Build
-        run: xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
+        run: xmake build -y fastxl_tests fastxl_cli fastxl_python fastxl
 
       - name: Generate fixtures
         run: python3 projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -55,41 +55,42 @@ jobs:
       - name: Public headers compile without exceptions
         run: |
           g++ -std=c++20 -fno-exceptions -Wall -Wextra -fsyntax-only \
-            -Iprojects/fastxl-core/include projects/tests/no_exceptions_check.cpp
+            -Iprojects/libfastxl/include projects/tests/cpp/no_exceptions_check.cpp
 
       - name: C++ tests
         run: |
-          bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
+          bin=$(find build -type f -name fastxl_tests -perm -u+x | head -1)
           test -n "$bin"
           "$bin"
 
       - name: CLI, Python and MCP checks
         run: |
-          python3 projects/tests/test_cli.py
-          python3 projects/tests/test_python.py
-          python3 projects/tests/test_mcp.py
+          python3 projects/tests/python/test_cli.py
+          python3 projects/tests/python/test_python.py
+          python3 projects/tests/python/test_mcp.py
 
       - name: C ABI SDK checks
         run: |
-          cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
-            projects/fastxl-c/tests/test_c_abi.c -Lbuild/lib -lfastxl \
+          cc -std=c11 -Wall -Wextra -Iprojects/libfastxl/include \
+            projects/tests/c_abi/test_c_abi.c -Lbuild/lib -lfastxl \
             -Wl,-rpath,"$PWD/build/lib" -o build/test_c_abi
           mkdir -p build/c-abi-tmp
           build/test_c_abi projects/tests/fixtures/basic.xlsx build/c-abi-tmp
-          c++ -std=c++20 -Wall -Wextra -Iprojects/fastxl-c/include \
-            projects/fastxl-c/tests/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
+          c++ -std=c++20 -Wall -Wextra -Iprojects/libfastxl/include \
+            projects/tests/c_abi/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
             -Wl,-rpath,"$PWD/build/lib" -o build/test_cxx_abi
           build/test_cxx_abi projects/tests/fixtures/basic.xlsx
           nm -D --defined-only build/lib/libfastxl.so | awk '{print $3}' |
             grep -v '^fastxl_' | test ! -s /dev/stdin
-          python3 projects/tests/test_c_abi.py
+          python3 projects/tests/python/test_c_abi.py
+          FASTXL_BACKEND=native python3 projects/tests/python/test_c_abi.py
           python3 projects/tools/package_sdk.py
           ROOT="$PWD"
           python3 projects/tools/package_wheel.py --plat-name linux_x86_64 \
             --out build/wheelhouse
-          python3 -m zipfile -e build/wheelhouse/fastxl_ctypes-*.whl build/wheel-test
-          test -f build/wheel-test/fastxl_ctypes/libfastxl.so
-          (cd /tmp && PYTHONPATH="$ROOT/build/wheel-test" python3 -c "import fastxl_ctypes; s = fastxl_ctypes.schema('$ROOT/projects/tests/fixtures/basic.xlsx'); assert s['ok'] is True, s; print('wheel ok:', fastxl_ctypes.version())")
+          python3 -m zipfile -e build/wheelhouse/fastxl-*.whl build/wheel-test
+          test -f build/wheel-test/fastxl/libfastxl.so
+          (cd /tmp && PYTHONPATH="$ROOT/build/wheel-test" python3 -c "import fastxl; assert fastxl.__backend__ == 'ctypes'; s = fastxl.schema('$ROOT/projects/tests/fixtures/basic.xlsx'); assert s['ok'] is True, s; print('wheel ok:', fastxl.version())")
 
   # Gate the released Linux SDK artifact: it must stay loadable on glibc 2.28
   # hosts, which only a manylinux_2_28 build can guarantee.
@@ -127,8 +128,8 @@ jobs:
           xmake f -y -m release \
             --cxflags="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
             --ldflags="-fsanitize=address,undefined"
-          xmake build -y fastxl-tests
-          bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
+          xmake build -y fastxl_tests
+          bin=$(find build -type f -name fastxl_tests -perm -u+x | head -1)
           test -n "$bin"
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 "$bin"
 
@@ -136,10 +137,10 @@ jobs:
         run: |
           rm -rf build
           xmake f -y -m release --cxflags="-fsanitize=thread -g" --ldflags="-fsanitize=thread"
-          xmake build -y fastxl-tests
-          bin=$(find build -type f -name fastxl-tests -perm -u+x | head -1)
+          xmake build -y fastxl_tests
+          bin=$(find build -type f -name fastxl_tests -perm -u+x | head -1)
           test -n "$bin"
-          TSAN_OPTIONS=halt_on_error=1:suppressions=projects/tests/tsan.supp "$bin"
+          TSAN_OPTIONS=halt_on_error=1:suppressions=projects/tests/cpp/tsan.supp "$bin"
 
   windows:
     name: windows-x64
@@ -178,7 +179,7 @@ jobs:
           xmake f -y -m release -p windows -a x64
 
       - name: Build
-        run: xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
+        run: xmake build -y fastxl_tests fastxl_cli fastxl_python fastxl
 
       - name: Generate fixtures
         run: python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -186,47 +187,47 @@ jobs:
       - name: C++ tests
         shell: pwsh
         run: |
-          $bin = Get-ChildItem -Path build -Recurse -Filter fastxl-tests.exe |
+          $bin = Get-ChildItem -Path build -Recurse -Filter fastxl_tests.exe |
             Where-Object { -not $_.PSIsContainer } | Select-Object -First 1
-          if (-not $bin) { throw "fastxl-tests.exe not found" }
+          if (-not $bin) { throw "fastxl_tests.exe not found" }
           & $bin.FullName
 
       - name: CLI, Python and MCP checks
         run: |
-          python projects/tests/test_cli.py
-          python projects/tests/test_python.py
-          python projects/tests/test_mcp.py
+          python projects/tests/python/test_cli.py
+          python projects/tests/python/test_python.py
+          python projects/tests/python/test_mcp.py
 
       - name: C ABI SDK checks
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build\c-abi-tmp | Out-Null
           $env:PATH = (Resolve-Path build\lib).Path + ";" + $env:PATH
-          cl /nologo /W4 /std:c11 /Iprojects\fastxl-c\include `
-            projects\fastxl-c\tests\test_c_abi.c `
+          cl /nologo /W4 /std:c11 /Iprojects\libfastxl\include `
+            projects\tests\c_abi\test_c_abi.c `
             /Fe:build\test_c_abi.exe /link /LIBPATH:build\lib fastxl.lib
           if ($LASTEXITCODE -ne 0) { throw "cl failed for the C ABI test" }
           build\test_c_abi.exe projects\tests\fixtures\basic.xlsx build\c-abi-tmp
           if ($LASTEXITCODE -ne 0) { throw "test_c_abi.exe failed" }
-          cl /nologo /W4 /std:c++20 /EHsc /Iprojects\fastxl-c\include `
-            projects\fastxl-c\tests\test_cxx_abi.cpp `
+          cl /nologo /W4 /std:c++20 /EHsc /Iprojects\libfastxl\include `
+            projects\tests\c_abi\test_cxx_abi.cpp `
             /Fe:build\test_cxx_abi.exe /link /LIBPATH:build\lib fastxl.lib
           if ($LASTEXITCODE -ne 0) { throw "cl failed for the C++ ABI test" }
           build\test_cxx_abi.exe projects\tests\fixtures\basic.xlsx
           if ($LASTEXITCODE -ne 0) { throw "test_cxx_abi.exe failed" }
-          python projects\tests\test_c_abi.py
+          python projects\tests\python\test_c_abi.py
           if ($LASTEXITCODE -ne 0) { throw "test_c_abi.py failed" }
           python projects\tools\package_sdk.py
           if ($LASTEXITCODE -ne 0) { throw "package_sdk.py failed" }
           python projects\tools\package_wheel.py --plat-name win_amd64 --out build\wheelhouse
           if ($LASTEXITCODE -ne 0) { throw "package_wheel.py failed" }
-          $wheel = (Get-ChildItem build\wheelhouse\fastxl_ctypes-*.whl | Select-Object -First 1).FullName
+          $wheel = (Get-ChildItem build\wheelhouse\fastxl-*.whl | Select-Object -First 1).FullName
           python -m pip install --quiet --no-deps --target build\wheel-test $wheel
           if ($LASTEXITCODE -ne 0) { throw "pip install of the wheel failed" }
           Push-Location $env:TEMP
           try {
             $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\build\wheel-test"
-            python -c "import fastxl_ctypes, sys; s = fastxl_ctypes.schema(sys.argv[1]); assert s['ok'] is True, s; print('wheel ok:', fastxl_ctypes.version())" "$env:GITHUB_WORKSPACE\projects\tests\fixtures\basic.xlsx"
+            python -c "import fastxl, sys; assert fastxl.__backend__ == 'ctypes'; s = fastxl.schema(sys.argv[1]); assert s['ok'] is True, s; print('wheel ok:', fastxl.version())" "$env:GITHUB_WORKSPACE\projects\tests\fixtures\basic.xlsx"
             if ($LASTEXITCODE -ne 0) { throw "wheel import failed" }
           } finally {
             Pop-Location

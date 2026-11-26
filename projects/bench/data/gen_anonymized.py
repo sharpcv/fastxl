@@ -25,7 +25,7 @@ for candidate in (ROOT / "build" / "python", ROOT / "bindings" / "python"):
 try:
     import fastxl
 except Exception as error:  # pragma: no cover - build guidance
-    raise SystemExit("cannot import fastxl (run xmake build -y fastxl-python first): %s" % error)
+    raise SystemExit("cannot import fastxl (run xmake build -y fastxl_python first): %s" % error)
 
 REGIONS = ["华东", "华南", "华北", "西南", "东北"]
 STATUSES = ["已签收", "运输中", "已退回", "待揽收"]

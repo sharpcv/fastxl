@@ -7,7 +7,7 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 2. **AI/数据探针**：输出列类型、空值、distinct、top values、数值统计、枚举、
    元数据和行级预览，供模型或代码生成器消费。
 
-本文只描述公开头文件 `projects/fastxl-core/include/fastxl/*.hpp` 中的 API。CLI 的完整用法
+本文只描述公开头文件 `projects/libfastxl/include/fastxl/*.hpp` 中的 API。CLI 的完整用法
 见 [README](../README.md) 和 [AI integration](ai.md)。
 
 ---
@@ -59,7 +59,7 @@ fastxl 是一个 C++20 表格库，用统一的读取/写入接口处理 **XLSX�
 
 ```sh
 xmake f -y -m release
-xmake build -y fastxl-cli fastxl-python
+xmake build -y fastxl_cli fastxl_python
 ```
 
 Windows 上第一条命令改为 `xmake f -y -m release -p windows -a x64`。Python 绑定
@@ -80,11 +80,11 @@ Linux 下库内部使用 `std::thread`（`profile` 并行分析与 XLSX 写出�
 在自己的 xmake 工程中：
 
 ```lua
-add_deps("fastxl-core")
+add_deps("fastxl_core")
 ```
 
-或在 CMake 中自行编译 `projects/fastxl-core/src/*.cpp`、添加
-`projects/fastxl-core/include` 和 `projects/fastxl-core/src` 到 include 路径，并链接上述依赖。
+或在 CMake 中自行编译 `projects/libfastxl/src/core/*.cpp`、添加
+`projects/libfastxl/include` 和 `projects/libfastxl/src/core` 到 include 路径，并链接上述依赖。
 
 头文件入口：
 
@@ -94,7 +94,7 @@ add_deps("fastxl-core")
 
 ### 内部命名空间
 
-`fastxl` 顶层只放公开 API（`projects/fastxl-core/include/fastxl/*.hpp`）。实现全部位于
+`fastxl` 顶层只放公开 API（`projects/libfastxl/include/fastxl/*.hpp`）。实现全部位于
 `fastxl::detail` 之下，并按子系统隔离：
 
 | 命名空间 | 内容 |
@@ -109,7 +109,7 @@ add_deps("fastxl-core")
 | `fastxl::detail::simd` | SSE2 分隔符扫描、ASCII 快速检查、XML 文本单遍校验 |
 | `fastxl::detail` | `FlatMap`/`FlatSet`、工作簿/写入器 pimpl、`WorkbookAccessor` |
 
-内部头文件在 `projects/fastxl-core/src/`，不随库安装，调用方不应包含。
+内部头文件在 `projects/libfastxl/src/core/`，不随库安装，调用方不应包含。
 
 ### 实现要点
 
@@ -1016,7 +1016,7 @@ CLI 退出码：
 
 以 `--format jsonl` 运行时，JSON 失败对象包含 `error.code`、`error.message` 和
 `error.exit_code`。
-`fastxl-cli errors [--format text|table|jsonl]` 列出全部错误码、对应的退出码和一行解释。
+`fastxl errors [--format text|table|jsonl]` 列出全部错误码、对应的退出码和一行解释。
 
 ---
 
@@ -1077,37 +1077,37 @@ CLI 退出码：
 ## 13. CLI 速览
 
 ```sh
-fastxl-cli info <file.xlsx> [--max-bytes N] [--format text|table|jsonl]
-fastxl-cli preview <file|-> [--sheet ...] [--header-row N|auto|--no-header]
+fastxl info <file.xlsx> [--max-bytes N] [--format text|table|jsonl]
+fastxl preview <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--rows N] [--range A1:F20] [--columns 1,3-5]
                           [--max-cell-bytes N] [--max-bytes N]
                           [--format text|table|jsonl]
-fastxl-cli probe <file|-> [--sheet ...] [--header-row N|auto|--no-header]
+fastxl probe <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
                           [--distinct-cap N] [--jobs N] [--max-bytes N]
                           [--format text|table|jsonl]
-fastxl-cli schema <file|-> [--sheet ...] [--header-row N|auto|--no-header]
+fastxl schema <file|-> [--sheet ...] [--header-row N|auto|--no-header]
                           [--max-rows N] [--sample N] [--top N]
                           [--distinct-cap N] [--jobs N] [--max-bytes N]
                           [--format text|table|jsonl]
-fastxl-cli search <file|-> --query TEXT [--regex] [--case-sensitive]
+fastxl search <file|-> --query TEXT [--regex] [--case-sensitive]
                           [--context N] [--max-hits N] [--max-cell-bytes N]
                           [--sheet ...] [--max-bytes N] [--format text|table|jsonl]
-fastxl-cli convert <in|-> --out <out|-> [--from ...] [--to ...]
+fastxl convert <in|-> --out <out|-> [--from ...] [--to ...]
                           [--sheet ...] [--header-row N|--no-header]
                           [--delimiter C] [--infer|--no-infer]
                           [--normalize] [--fill-gaps] [--columns 1,3-5]
                           [--limit N] [--crlf] [--bom]
                           [--sheet-name NAME] [--compress-level N]
-fastxl-cli errors [--format text|table|jsonl]
-fastxl-cli --version
-fastxl-cli --help
-fastxl-cli <command> --help
+fastxl errors [--format text|table|jsonl]
+fastxl --version
+fastxl --help
+fastxl <command> --help
 ```
 
 约定：
 
-- `fastxl-cli --help` 打印命令概览，`fastxl-cli <command> --help` 打印该命令的
+- `fastxl --help` 打印命令概览，`fastxl <command> --help` 打印该命令的
   全部选项、默认值和示例；不带任何参数等价于 `--help`，退出码为 0。
 - `--sheet` 接受名称或 1-based 索引；JSON 的 `sheet_index` 是 0-based。
 - `--version` 输出 fastxl 版本与依赖库版本：minizip-ng、zlib-ng、fast_float、
@@ -1124,7 +1124,7 @@ fastxl-cli <command> --help
   枚举、元数据、单值列统计、尾部行与尾部列，并输出 `budget` 对象
   （`max_bytes`/`bytes`/`applied`/`within_budget`/`stages`/`folded_columns`）。
   永不截断 JSON；无法塞进预算时如实返回 `"within_budget": false`。
-- MCP 包装：`python projects/tools/fastxl_mcp.py [--cli <fastxl-cli>]`，默认
+- MCP 包装：`python projects/tools/fastxl_mcp.py [--cli <fastxl>]`，默认
   native-first（进程内 `fastxl.Session`），模块不可用或设置 `FASTXL_FORCE_CLI=1`
   时回落到 CLI；工具名为 `fastxl_info`、`fastxl_preview`、`fastxl_schema`、
   `fastxl_probe`、`fastxl_search`，均支持 `max_bytes`。

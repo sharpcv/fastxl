@@ -1,5 +1,5 @@
 set_project("fastxl")
-FASTXL_PROJECT_VERSION = "1.3.1"
+FASTXL_PROJECT_VERSION = "1.3.2"
 set_version(FASTXL_PROJECT_VERSION)
 set_license("MIT")
 set_languages("c++20")
@@ -92,7 +92,7 @@ add_requires("simdutf 8.2.0")
 add_requires("fmt 12.2.1")
 add_requires("nlohmann_json 3.12.0")
 
-includes("projects/fastxl-core", "projects/fastxl-cli", "projects/fastxl-c", "bindings")
+includes("projects/libfastxl", "projects/fastxl", "bindings")
 if os.isdir("projects/bench") then includes("projects/bench") end
 if os.isdir("projects/tests") then includes("projects/tests") end
 

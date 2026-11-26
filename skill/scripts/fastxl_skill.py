@@ -2,7 +2,7 @@
 """Command-line front-end for the fastxl skill.
 
 The native pybind11 module is used when available; otherwise the script falls
-back to bundled fastxl-cli for the read probes. All JSON is UTF-8 and printed
+back to the bundled fastxl CLI for the read probes. All JSON is UTF-8 and printed
 with stable, human-readable indentation.
 """
 
@@ -178,21 +178,18 @@ def find_cli() -> Path:
     env = os.environ.get("FASTXL_CLI")
     if env:
         candidates.append(Path(env))
-    exe_name = "fastxl-cli.exe" if os.name == "nt" else "fastxl-cli"
-    candidates += [
-        SKILL_DIR / "bin" / exe_name,
-        SKILL_DIR / "bin" / "fastxl-cli.exe",
-        SKILL_DIR / "bin" / "fastxl-cli",
-        SKILL_DIR.parent / "build" / "bin" / exe_name,
-    ]
+    for exe_name in ("fastxl.exe", "fastxl", "fastxl-cli.exe", "fastxl-cli"):
+        candidates.append(SKILL_DIR / "bin" / exe_name)
+        candidates.append(SKILL_DIR.parent / "build" / "bin" / exe_name)
     for candidate in candidates:
         if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
             return candidate
-    found = shutil.which("fastxl-cli")
-    if found:
-        return Path(found)
+    for name in ("fastxl", "fastxl-cli"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
     raise RuntimeError(
-        "fastxl-cli not found; put it in the skill bin/ directory, set FASTXL_CLI, "
+        "fastxl not found; put it in the skill bin/ directory, set FASTXL_CLI, "
         "or add it to PATH"
     )
 
@@ -243,7 +240,7 @@ def run_cli_command(args: Sequence[str]) -> subprocess.CompletedProcess[bytes]:
             exc = FastxlCliError(error.get("message") or text)
             exc.code = error.get("code")
             raise exc
-        raise RuntimeError(text or ("fastxl-cli exited with %d" % result.returncode))
+        raise RuntimeError(text or ("fastxl exited with %d" % result.returncode))
     return result
 
 
@@ -252,7 +249,7 @@ def run_cli(args: Sequence[str]) -> Any:
     try:
         return json.loads(result.stdout.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise RuntimeError("fastxl-cli returned non-JSON output: %s" % exc) from exc
+        raise RuntimeError("fastxl returned non-JSON output: %s" % exc) from exc
 
 
 def typed_value(text: str, kind: str) -> CellValue:
@@ -487,7 +484,7 @@ def cmd_convert(args: _ConvertArgs) -> JsonPayload:
         raise RuntimeError("convert does not support --header-row auto; pass a row number")
     if args.out == "-":
         raise RuntimeError(
-            "convert --out - writes raw bytes to stdout; run fastxl-cli convert directly"
+            "convert --out - writes raw bytes to stdout; run fastxl convert directly"
         )
     cli = ["convert", args.input, "--out", args.out]
     if args.format:

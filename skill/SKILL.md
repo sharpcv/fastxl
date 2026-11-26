@@ -22,12 +22,12 @@ resolve against the current working directory.
 |---|---|
 | `scripts/fastxl_skill.py` | JSON command wrapper: `info`, `schema`, `probe`, `preview`, `write`, `convert` |
 | `python/fastxl/` | Native pybind11 module + `fastxl` package |
-| `bin/fastxl-cli` | Portable CLI backend and fallback for read commands |
+| `bin/fastxl` | Portable CLI backend and fallback for read commands |
 | `reference/reference.md` | Copy of `docs/ai.md`: field-by-field payload reference |
 | `reference/probe.schema.json` | Copy of `docs/probe.schema.json`: JSON Schema for read payloads |
 | `LICENSE` | MIT license for this skill and the bundled binaries |
 
-Read commands use the native module and fall back to `bin/fastxl-cli` when
+Read commands use the native module and fall back to `bin/fastxl` when
 the module cannot load (normally a different Python version or platform).
 `write` needs the native module. `convert` always shells out to the CLI. Force
 the fallback with `FASTXL_FORCE_CLI=1`; override the backend with `FASTXL_CLI`.
@@ -59,7 +59,7 @@ python "$SKILL/scripts/fastxl_skill.py" write result.xlsx --jsonl rows.jsonl --s
 
 All commands print one UTF-8 JSON object to stdout. Failures are one JSON object
 on stderr with a non-zero exit; the error object carries `code`, `message`,
-`exit_code`, `command` and `file`. `fastxl-cli errors --format jsonl` lists every error
+`exit_code`, `command` and `file`. `fastxl errors --format jsonl` lists every error
 code with its exit code and one-line explanation. For
 `info`/`schema`/`probe`/`preview`/`convert`,
 `-` reads stdin when `--format csv|xlsx|jsonl` is given; stdin is spooled to a
@@ -213,7 +213,7 @@ text); ISO dates become date values only with inference. `--normalize` rewrites
 values to canonical text, `--fill-gaps` pads short rows, and `--columns`
 projects. xlsx-to-xlsx with no `--sheet` copies every worksheet. Table-to-table
 conversion of a multi-sheet xlsx needs `--sheet`. The wrapper requires an output
-path; run `fastxl-cli convert ... --out -` directly for binary stdout.
+path; run `fastxl convert ... --out -` directly for binary stdout.
 
 ## Recommended workflow
 

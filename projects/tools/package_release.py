@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a release zip from the artifacts in ``build/``.
 
-    xmake build -y fastxl-cli fastxl-python
+    xmake build -y fastxl_cli fastxl_python
     python projects/tools/stage_skill.py
     python projects/tools/package_release.py
     # -> build/fastxl-<version>-<platform>.zip
@@ -69,8 +69,8 @@ def main():
     prefix = "fastxl-%s" % version
 
     is_win = sys.platform == "win32"
-    cli = ROOT / "build" / "bin" / ("fastxl-cli.exe" if is_win else "fastxl-cli")
-    lib = ROOT / "build" / "lib" / ("fastxl-core.lib" if is_win else "libfastxl-core.a")
+    cli = ROOT / "build" / "bin" / ("fastxl.exe" if is_win else "fastxl")
+    lib = ROOT / "build" / "lib" / ("fastxl_core.lib" if is_win else "libfastxl_core.a")
     pyd = ROOT / "build" / "python" / "fastxl" / ("_fastxl" + native_suffix())
     important = [cli, lib, pyd, ROOT / "README.md", ROOT / "LICENSE"]
     missing = [str(path) for path in important if not path.is_file()]
@@ -86,6 +86,8 @@ def main():
             add_file(zf, header, arcname)
         package_src = ROOT / "bindings" / "python" / "fastxl"
         add_file(zf, package_src / "__init__.py", "%s/python/fastxl/__init__.py" % prefix)
+        add_file(zf, package_src / "_ctypes_backend.py",
+                 "%s/python/fastxl/_ctypes_backend.py" % prefix)
         add_file(zf, package_src / "_fastxl.pyi", "%s/python/fastxl/_fastxl.pyi" % prefix)
         add_file(zf, package_src / "py.typed", "%s/python/fastxl/py.typed" % prefix)
         add_file(zf, pyd, "%s/python/fastxl/%s" % (prefix, pyd.name))

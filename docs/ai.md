@@ -10,19 +10,19 @@ index; JSON `sheet_index` values are 0-based.
 
 ```sh
 # Metadata only: parts, sheet names, sizes, shared-string count.
-fastxl-cli info book.xlsx --format jsonl
+fastxl info book.xlsx --format jsonl
 
 # Raw rows with A1 refs, header candidates, column names, merge/used range.
-fastxl-cli preview book.xlsx --rows 20 [--sheet Data] [--header-row auto]
+fastxl preview book.xlsx --rows 20 [--sheet Data] [--header-row auto]
 
 # Full column profile: types, nulls, distinct, numeric stats, samples, flags.
-fastxl-cli probe book.xlsx --format jsonl [--sheet Data] [--jobs 4] [--max-rows N] [--top N]
+fastxl probe book.xlsx --format jsonl [--sheet Data] [--jobs 4] [--max-rows N] [--top N]
 
 # Column schema for code generation: name, inferred type, nullability, stats.
-fastxl-cli schema book.xlsx --format jsonl [--sheet Data] [--header-row auto] [--max-rows N] [--top N]
+fastxl schema book.xlsx --format jsonl [--sheet Data] [--header-row auto] [--max-rows N] [--top N]
 
 # Find text/formulas across sheets; A1 hits plus a context window.
-fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl
+fastxl search book.xlsx --query invoice --context 2 --format jsonl
 ```
 
 The CLI is human-readable by default (`text`, which is an aligned table for
@@ -50,7 +50,7 @@ with `--format jsonl` fails, stderr is a single JSON object:
 
 `error.code` is stable; `error.exit_code` is the process exit code and
 `error.message` is human text. `UsageError` (exit 1) covers bad arguments;
-library failures use `fastxl::ErrorCode` names. `fastxl-cli errors --format jsonl`
+library failures use `fastxl::ErrorCode` names. `fastxl errors --format jsonl`
 returns the full table of exit codes and error codes with one-line
 explanations:
 
@@ -62,7 +62,7 @@ explanations:
 
 | Exit | Meaning |
 |---|---|
-| 0 | success; also bare `fastxl-cli` and `--help` |
+| 0 | success; also bare `fastxl` and `--help` |
 | 1 | usage error (`UsageError`) |
 | 2 | input/format error |
 | 3 | output or atomic-replace error |
@@ -351,11 +351,11 @@ native-first: when the compiled module is importable (in-tree `build/python` or
 an installed package) it answers in-process through one long-lived
 `fastxl.Session`, so repeated calls skip the OPC and shared-string parse and
 reuse the cached profiles/searches. Without the module, or with
-`FASTXL_FORCE_CLI=1` / `--cli-only`, it shells out to `fastxl-cli`:
+`FASTXL_FORCE_CLI=1` / `--cli-only`, it shells out to `fastxl`:
 
 ```sh
 python projects/tools/fastxl_mcp.py                            # native when available
-python projects/tools/fastxl_mcp.py --cli build/bin/fastxl-cli # .exe on Windows
+python projects/tools/fastxl_mcp.py --cli build/bin/fastxl # .exe on Windows
 FASTXL_FORCE_CLI=1 python projects/tools/fastxl_mcp.py
 ```
 
@@ -402,9 +402,9 @@ SAX `CellRowView`s are sparse, so check `row[0].col` or use `find(column)`.
 For tabular data, generate CSV or JSONL and convert:
 
 ```sh
-fastxl-cli convert data.jsonl --out book.xlsx --sheet-name Data
-fastxl-cli convert data.csv --out book.xlsx --infer --header-row 1
-fastxl-cli convert data.csv --out out.jsonl --to jsonl --normalize
+fastxl convert data.jsonl --out book.xlsx --sheet-name Data
+fastxl convert data.csv --out book.xlsx --infer --header-row 1
+fastxl convert data.csv --out out.jsonl --to jsonl --normalize
 ```
 
 Text is written as shared strings by default (deduplicated, Excel-style); set

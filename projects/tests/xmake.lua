@@ -1,9 +1,9 @@
-target("fastxl-tests")
+target("fastxl_tests")
 set_kind("binary")
 set_default(false)
-add_files("*.cpp")
-add_deps("fastxl-core")
-add_includedirs(".", "../fastxl-core/src")
+add_files("cpp/*.cpp")
+add_deps("fastxl_core")
+add_includedirs("cpp", "../libfastxl/src/core")
 set_rundir("$(projectdir)")
 -- Keep symbols: sanitizer reports and crash stacks are useless when stripped.
 set_strip("none")

@@ -12,10 +12,10 @@
       "problemMatcher": []
     },
     {
-      "label": "xmake: build fastxl-cli (debug)",
+      "label": "xmake: build fastxl (debug)",
       "type": "shell",
       "command": "xmake",
-      "args": ["build", "-y", "fastxl-cli"],
+      "args": ["build", "-y", "fastxl_cli"],
       "options": {
         "cwd": "${workspaceFolder}"
       },

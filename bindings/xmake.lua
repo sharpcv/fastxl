@@ -44,30 +44,25 @@ else
     end
 end
 
-target("fastxl-python")
+target("fastxl_python")
     set_kind("shared")
     set_default(false)
     add_defines('FASTXL_VERSION="' .. FASTXL_PROJECT_VERSION .. '"')
     set_languages("c++20")
     add_files("fastxl_module.cpp")
-    add_files("../projects/fastxl-cli/src/headers.cpp")
-    add_files("../projects/fastxl-cli/src/preview_json.cpp")
-    add_files("../projects/fastxl-cli/src/args.cpp")
-    add_files("../projects/fastxl-cli/src/common.cpp")
     if py_include then
         add_includedirs(py_include)
     end
     if pybind_include then
         add_includedirs(pybind_include)
     end
-    add_includedirs("../projects/fastxl-cli/src")
     if py_libdir then
         add_linkdirs(py_libdir)
     end
     if py_library then
         add_links(py_library)
     end
-    add_deps("fastxl-core")
+    add_deps("fastxl_reports")
     add_packages("fmt", "nlohmann_json")
     set_extension(ext)
     set_basename("_fastxl")
@@ -75,10 +70,10 @@ target("fastxl-python")
     set_targetdir("$(projectdir)/build/python/fastxl")
     after_build(function (target)
         -- Keep the importable package self-contained in build/python/fastxl,
-        -- including PEP 561 type information.
+        -- including the ctypes fallback and PEP 561 type information.
         local src = path.join(os.projectdir(), "bindings", "python", "fastxl")
         local dst = path.join(os.projectdir(), "build", "python", "fastxl")
-        for _, name in ipairs({ "__init__.py", "_fastxl.pyi", "py.typed" }) do
+        for _, name in ipairs({ "__init__.py", "_ctypes_backend.py", "_fastxl.pyi", "py.typed" }) do
             os.cp(path.join(src, name), dst)
         end
     end)

@@ -615,3 +615,22 @@ def write_xlsx(
     header: bool = True,
     compression_level: int = 6,
 ) -> int: ...
+
+def convert(src: str, dst: str, **options: Any) -> None: ...
+
+class JsonlWriter:
+    def __init__(
+        self,
+        dst: str,
+        columns: Sequence[str] | None = None,
+        format: str = "",
+        header: bool = True,
+        delimiter: str = "",
+        crlf: bool = False,
+        bom: bool = False,
+        fsync: bool = True,
+        sheet_name: str = "Sheet1",
+        compression_level: int = 6,
+    ) -> None: ...
+    def write_jsonl(self, payload: str) -> None: ...
+    def finish(self) -> None: ...

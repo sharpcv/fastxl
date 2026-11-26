@@ -58,7 +58,7 @@ bytes, long paths and streamed xlsx.
   identical behavior. On Windows the mapping is created with share-delete so the
   source can still be replaced; a long-lived MCP cache disables mapping anyway.
 - **SIMD dispatch**: XML scanning uses AVX2 on x86_64 when the CPU and OS support
-  it, SSE2 otherwise, and NEON on AArch64. `fastxl-cli --version` prints the
+  it, SSE2 otherwise, and NEON on AArch64. `fastxl --version` prints the
   active backend. AVX2 is compiled in its own translation unit with per-file
   flags; the rest of the library is baseline.
 - **Strict XML by default**: mismatched tags, unknown entities, control

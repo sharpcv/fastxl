@@ -14,7 +14,7 @@ exercised with 3.14 and the Windows defaults target 3.15.
 ```sh
 pip install pybind11
 xmake f -y -m release              # Windows: add -p windows -a x64
-xmake build -y fastxl-python
+xmake build -y fastxl_python
 ```
 
 Supported platforms are Windows x64 and Linux; other platforms are not

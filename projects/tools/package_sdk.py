@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Build the binary C ABI SDK zip from the artifacts in ``build/``.
 
-    xmake build -y fastxl-c
+    xmake build -y fastxl
     python projects/tools/package_sdk.py
     # -> build/fastxl-sdk-<version>-<platform>.zip
 
-Layout: one shared library, two headers, the pure-ctypes Python package,
-LICENSE and THIRD_PARTY_NOTICES.txt. C++ users can link the shared library
-without the fastxl C++ headers or any third-party dependency.
+Layout: one shared library (plus the import library on Windows), the two C
+and C++ headers, `docs/c-abi.md`, LICENSE and THIRD_PARTY_NOTICES.txt. The
+Python package ships as a separate version-independent wheel.
 """
 
 import argparse
@@ -39,7 +39,7 @@ def find_library(is_win):
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise SystemExit("missing SDK library; build it with `xmake build -y fastxl-c`")
+    raise SystemExit("missing SDK library; build it with `xmake build -y fastxl`")
 
 
 def main():
@@ -57,8 +57,7 @@ def main():
     prefix = "fastxl-sdk-%s" % version
 
     library = find_library(is_win)
-    include_dir = ROOT / "projects" / "fastxl-c" / "include"
-    package_dir = ROOT / "projects" / "fastxl-c" / "python" / "fastxl_ctypes"
+    include_dir = ROOT / "projects" / "libfastxl" / "include"
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
@@ -68,9 +67,6 @@ def main():
         if is_win:
             import_lib = ROOT / "build" / "lib" / "fastxl.lib"
             add_file(zf, import_lib, "%s/lib/fastxl.lib" % prefix)
-        for path in sorted(package_dir.glob("*")):
-            if path.is_file() and path.suffix in (".py", ".typed"):
-                add_file(zf, path, "%s/python/fastxl_ctypes/%s" % (prefix, path.name))
         add_file(zf, ROOT / "docs" / "c-abi.md", "%s/docs/c-abi.md" % prefix)
         add_file(zf, ROOT / "LICENSE", "%s/LICENSE" % prefix)
         add_file(zf, ROOT / "THIRD_PARTY_NOTICES.txt",

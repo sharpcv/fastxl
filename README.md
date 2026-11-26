@@ -26,20 +26,20 @@ models and code generators can inspect spreadsheets without pandas or openpyxl.
 
 ```sh
 xmake f -y -m release
-xmake build -y fastxl-cli fastxl-python fastxl-c
+xmake build -y fastxl_cli fastxl_python fastxl
 ```
 
 On Windows add `-p windows -a x64` to the first command.
 
 ```sh
-build/bin/fastxl-cli info book.xlsx
-build/bin/fastxl-cli schema book.xlsx --header-row auto --format table
-build/bin/fastxl-cli probe book.xlsx --format jsonl --sheet Data --jobs 4 --max-rows 200000
-build/bin/fastxl-cli preview book.xlsx --rows 20
-build/bin/fastxl-cli search book.xlsx --query invoice --context 2 --format jsonl
-build/bin/fastxl-cli schema book.xlsx --regions --header-row auto --format jsonl
-build/bin/fastxl-cli probe book.xlsx --format jsonl --max-bytes 4000 --sheet Data
-build/bin/fastxl-cli convert data.csv --out book.xlsx --header-row 1
+build/bin/fastxl info book.xlsx
+build/bin/fastxl schema book.xlsx --header-row auto --format table
+build/bin/fastxl probe book.xlsx --format jsonl --sheet Data --jobs 4 --max-rows 200000
+build/bin/fastxl preview book.xlsx --rows 20
+build/bin/fastxl search book.xlsx --query invoice --context 2 --format jsonl
+build/bin/fastxl schema book.xlsx --regions --header-row auto --format jsonl
+build/bin/fastxl probe book.xlsx --format jsonl --max-bytes 4000 --sheet Data
+build/bin/fastxl convert data.csv --out book.xlsx --header-row 1
 ```
 
 `--format` picks the output style: `text` (default — key/value for `info` and
@@ -54,7 +54,7 @@ stats, trailing rows, trailing columns) and reports what happened in a `budget`
 object. The payload always stays valid JSON and `within_budget` says whether the
 cap was met. See [docs/ai.md](docs/ai.md#output-budget).
 
-`fastxl-cli --version` also lists the versions of the linked libraries
+`fastxl --version` also lists the versions of the linked libraries
 (minizip-ng, zlib-ng, fast_float, simdutf, fmt, nlohmann_json).
 
 Python:
@@ -90,12 +90,13 @@ described by [`docs/probe.schema.json`](docs/probe.schema.json).
 
 ### Python without a version-specific build
 
-`fastxl_ctypes` is a pure `ctypes` wrapper over the C ABI shared library. One
-built `libfastxl.so`/`fastxl.dll` serves CPython 3.8–3.15 (including
-free-threaded builds) and PyPy; no extension module is compiled per version.
+`fastxl` is one package with two backends: it prefers the native `_fastxl`
+extension and otherwise loads `libfastxl.so`/`fastxl.dll` through ctypes. One
+built library serves CPython 3.8–3.15 (including free-threaded builds) and
+PyPy; no extension module is compiled per version.
 
 ```python
-import fastxl_ctypes as fastxl
+import fastxl
 
 with fastxl.Session() as session:
     session.schema("book.xlsx", sheet="Data", header_row="auto")
@@ -105,26 +106,26 @@ for row in fastxl.iter_rows("book.xlsx", sheet="Data", batch_size=4096,
 fastxl.convert("book.xlsx", "book.csv", sheet="Data")
 ```
 
-Build it with `xmake build -y fastxl-c`; the package is copied to
-`build/lib/fastxl_ctypes`. Release assets also include version-independent
-wheels (`fastxl_ctypes-<ver>-py3-none-{manylinux_2_28_x86_64,
-manylinux_2_28_aarch64,win_amd64}.whl`) with the shared library bundled, so
-`pip install fastxl_ctypes-…whl` is enough — no `FASTXL_LIBRARY` setup and no
+Build it with `xmake build -y fastxl_python fastxl`; the package is copied to
+`build/python/fastxl`. Release assets also include version-independent wheels
+(`fastxl-<ver>-py3-none-{manylinux_2_28_x86_64, manylinux_2_28_aarch64,
+win_amd64}.whl`) with the shared library bundled, so
+`pip install fastxl-…whl` is enough — no `FASTXL_LIBRARY` setup and no
 per-interpreter build. See [`docs/c-abi.md`](docs/c-abi.md) for the C and C++
 surfaces.
 
 ## Errors and exit codes
 
-Bare `fastxl-cli` (or `fastxl-cli --help`) prints detailed usage to stdout and
-exits 0; `fastxl-cli <command> --help` documents that command's options,
+Bare `fastxl` (or `fastxl --help`) prints detailed usage to stdout and
+exits 0; `fastxl <command> --help` documents that command's options,
 defaults and examples. Every failure prints the error code in both modes —
 `error [InvalidUtf8]: ...` on stderr, or `error.code` and `error.exit_code` in
 JSON.
 
 ```sh
-fastxl-cli errors                        # human-readable exit/error code reference
-fastxl-cli errors --format table         # aligned tables
-fastxl-cli errors --format jsonl         # same tables as JSON
+fastxl errors                        # human-readable exit/error code reference
+fastxl errors --format table         # aligned tables
+fastxl errors --format jsonl         # same tables as JSON
 ```
 
 | Exit | Name | Meaning |
@@ -137,7 +138,7 @@ fastxl-cli errors --format jsonl         # same tables as JSON
 
 `UsageError` (exit 1) is emitted by the CLI for bad arguments; the remaining
 codes are library `fastxl::ErrorCode` values and have one-line explanations in
-`fastxl-cli errors`. A failure payload looks like:
+`fastxl errors`. A failure payload looks like:
 
 ```json
 {"version":1,"ok":false,"error":{"code":"FileNotFound",
@@ -176,7 +177,7 @@ out), fast_float, simdutf, fmt and nlohmann_json.
 
 ```sh
 xmake f -y -m release
-xmake build -y fastxl-cli fastxl-python
+xmake build -y fastxl_cli fastxl_python
 ```
 
 On Windows use `xmake f -y -m release -p windows -a x64`. The Python module is
@@ -184,9 +185,9 @@ skipped in debug mode (it must use the release CPython CRT) and needs local
 CPython headers; see [`bindings/README.md`](bindings/README.md) for the
 `FASTXL_PY_*` overrides.
 
-`xmake install -o <prefix> fastxl-core fastxl-cli` installs the static library
+`xmake install -o <prefix> fastxl_core fastxl` installs the static library
 and public headers under `<prefix>/lib` and `<prefix>/include/fastxl`, and the
-CLI under `<prefix>/bin`.
+C ABI shared library; `fastxl_cli` installs the `fastxl` binary.
 
 ## Performance
 
@@ -218,7 +219,7 @@ small previews benefited most. `--max-bytes` adds well under 5% (schema 82 →
 The same `large.xlsx` fixture (15,000 × 10, 6.1 MiB uncompressed worksheet part)
 and method, measured on **Windows 10 x64 (10.0.19045), Intel Core i7-14700
 (20C/28T), MSVC 19.51 / VS 2026 release build, Python 3.15.0**: one
-`fastxl-cli.exe` process per CLI call, native is one cold in-process call, warm
+`fastxl.exe` process per CLI call, native is one cold in-process call, warm
 is the same call through a `Session` after one populate call (median of 5 runs,
 after a warm-up).
 
@@ -376,26 +377,26 @@ a fresh checkout builds them first (the Python suites also regenerate them when
 missing):
 
 ```sh
-xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
+xmake build -y fastxl_tests fastxl_cli fastxl_python fastxl
 python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
-./build/linux/x86_64/release/fastxl-tests   # build/windows/x64/release/fastxl-tests.exe on Windows
-python projects/tests/test_cli.py
-python projects/tests/test_python.py
-python projects/tests/test_mcp.py
-python projects/tests/test_c_abi.py
+./build/linux/x86_64/release/fastxl_tests   # build/windows/x64/release/fastxl_tests.exe on Windows
+python projects/tests/python/test_cli.py
+python projects/tests/python/test_python.py
+python projects/tests/python/test_mcp.py
+python projects/tests/python/test_c_abi.py
 ```
 
-`test_cli.py` and `test_mcp.py` only need `fastxl-cli`; `test_python.py` also
+`test_cli.py` and `test_mcp.py` only need the CLI; `test_python.py` also
 needs the native module built for the same interpreter; `test_c_abi.py` needs
-`fastxl-c` and checks C ABI/CLI parity, streaming, the writer and conversion.
+the shared library and checks C ABI/CLI parity, streaming, the writer and conversion.
 The pure C and C++ smoke tests are compiled directly:
 
 ```sh
-cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
-  projects/fastxl-c/tests/test_c_abi.c -Lbuild/lib -lfastxl \
+cc -std=c11 -Wall -Wextra -Iprojects/libfastxl/include \
+  projects/tests/c_abi/test_c_abi.c -Lbuild/lib -lfastxl \
   -Wl,-rpath,"$PWD/build/lib" -o build/test_c_abi
-c++ -std=c++20 -Wall -Wextra -Iprojects/fastxl-c/include \
-  projects/fastxl-c/tests/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
+c++ -std=c++20 -Wall -Wextra -Iprojects/libfastxl/include \
+  projects/tests/c_abi/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
   -Wl,-rpath,"$PWD/build/lib" -o build/test_cxx_abi
 ```
 
