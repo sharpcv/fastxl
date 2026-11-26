@@ -74,6 +74,28 @@ stable fastxl code in `.code` (`FileNotFound`, `InvalidSheetRef`, `EmptyTable`,
 ...). `preview` reports the resolved worksheet name in `sheet`; cells beyond the
 header-derived column set are counted in `extra_cells`.
 
+Rows are dicts by default; `read_rows(..., as_tuples=True)` instead returns each
+row as a tuple of typed cell values in column order (it takes precedence over
+`as_dicts=True`, and existing calls are unchanged). For a large sheet, stream
+the rows instead of materializing them: `iter_rows(...)` returns a lazy
+iterator over the same typed rows, with no `max_bytes` budget:
+
+```python
+it = fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
+                      as_tuples=True)
+it.columns        # column names from the resolved header row
+it.sheet, it.header_row
+for row in it:    # one tuple per row, read on demand
+    ...
+it.rows_read      # rows yielded so far
+it.truncated      # true if limit stopped the iteration early
+```
+
+`iter_rows` takes the row-reader options (`limit`, `offset`, `infer`,
+`delimiter`, `fill_gaps`, `max_columns`, `with_cells`, `as_dicts`,
+`as_tuples`). `Session.iter_rows` has the same signature but opens the file for
+the iteration instead of reusing the cached workbook.
+
 `preview_sheet(file, sheet=None, header_row=1, rows=20, range="", columns="",
 max_cell_bytes=256, max_bytes=0)` returns the CLI `preview` contract for one xlsx
 sheet (used range, resolved header row, merged cells, comments, tables, pivots,
@@ -84,17 +106,34 @@ Every read function accepts `max_bytes=0`; a positive value folds the payload an
 adds a `budget` object (`max_bytes`, `bytes`, `applied`, `within_budget`,
 `stages`, `folded_columns`) identical to the CLI's `--max-bytes`.
 
-For repeated calls against the same file, keep a `Session`: it caches the opened
-workbook, invalidates on `(mtime, size)` changes and evicts the least recently
-used entry past `capacity` (default 8). It covers `info`/`schema`/`probe`/
-`search`; `preview`/`read_rows` stream rows and are not cached.
+For repeated calls against the same file, keep a `Session`. It caches three
+layers, all invalidated when the file's `(mtime, size)` changes:
+
+- the opened workbook (OPC parts, shared strings, styles) for
+  `info`/`preview_sheet`/`schema`/`probe`/`search`, an LRU bounded by `capacity`
+  (default 8);
+- `SheetProfile`s for `schema`/`probe`, keyed by sheet and the profiling options
+  (`header_row`, `max_rows`, `sample`, `top`, `distinct_cap`, `regions`,
+  `jobs`), LRU-bounded by `profile_capacity` (default 64);
+- `search` payloads keyed by query and options, LRU-bounded by `search_capacity`
+  (default 16).
+
+A warm profile or search result skips the sheet scan; `max_bytes` is not part of
+either key, so the same result with a different budget is cheap. The caches hold
+memory per file, so lower the capacities (or call `session.clear()`) on
+low-memory hosts. `preview`/`read_rows`/`iter_rows` stream rows and are not
+cached.
 
 ```python
-with fastxl.Session(capacity=8) as session:
+with fastxl.Session(capacity=8, profile_capacity=64,
+                    search_capacity=16) as session:
     profile = session.probe("book.xlsx", max_bytes=4000)
     hits = session.search("book.xlsx", "invoice")
     page = session.preview_sheet("book.xlsx", rows=20)
-    print(session.stats())  # size, capacity, hits, misses
+    print(session.stats())
+    # size, capacity, hits, misses
+    # profiles, profile_capacity, profile_hits, profile_misses
+    # searches, search_capacity, search_hits, search_misses
 ```
 
 On Windows the session opens workbooks without `mmap` by default, so Excel can
@@ -126,8 +165,10 @@ Windows x64 release build, median of 5 runs:
 | `read_rows(0)` | 极兔18日数据.xlsx | 362 ms | 1.96 s | 5.4x |
 
 The native path removes process startup and JSON parsing; profiling itself is
-the same streaming code. Full-row reads still materialize Python objects, so
-use `limit` while exploring a large sheet. Run:
+the same streaming code. Full-row reads still materialize Python objects, so use
+`limit` while exploring a large sheet, `read_rows(..., as_tuples=True)` to avoid
+per-row dicts, or `iter_rows` to stream rows without materializing them at all.
+Run:
 
 ```sh
 python projects/bench/python_overhead.py --runs 5 --full

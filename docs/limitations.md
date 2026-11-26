@@ -212,19 +212,32 @@ bytes, long paths and streamed xlsx.
 ## Python and MCP
 
 - `fastxl.Session` caches the parsed workbook (OPC parts, shared strings,
-  styles), not row data: `preview`/`read_rows` still stream the sheet on every
-  call, and `schema`/`probe` still scan every row. Expect the Session to help
-  most with repeated `info`/`search` calls, least with full profiling.
+  styles) for `info`/`preview_sheet`/`schema`/`probe`/`search`, and adds bounded
+  profile and search-result caches. A repeated `schema`/`probe` with the same
+  sheet and options (`header_row`, `max_rows`, `sample`, `top`, `distinct_cap`,
+  `regions`, `jobs`) is served from a cached `SheetProfile` instead of scanning
+  the sheet again; repeated `search` calls reuse the cached payload keyed by
+  query and options. `max_bytes` is not part of either key, so re-requesting the
+  same result with a different budget is cheap.
+- Those caches are keyed on the file `(mtime, size)`, hold memory per file and
+  are LRU-bounded: `profile_capacity` (default 64 profiles) and
+  `search_capacity` (default 16 searches) on the constructor, dropped by
+  `session.clear()`; lower them on low-memory hosts. Row streaming is still
+  uncached: `preview`/`read_rows`/`iter_rows` read the sheet on every call, so
+  use `iter_rows` (with `as_tuples=True` for positional rows) when a full read
+  does not fit in memory.
+- Session entries and cached profiles/search payloads are invalidated by
+  `(mtime, size)`; a rewrite that preserves both (rare, e.g. same-size in-place
+  edit within the timestamp granularity) is not detected. Use `session.clear()`
+  when in doubt.
 - On Windows a resident `Session` opens workbooks without `mmap` by default so
   Excel can still save-replace the file; `Session(memory_map=True)` opts back in
   at the cost of possibly blocking that save while the cache holds it.
-- Session entries are invalidated by `(mtime, size)`; a rewrite that preserves
-  both (rare, e.g. same-size in-place edit within the timestamp granularity) is
-  not detected. Use `session.clear()` when in doubt.
 - Native and CLI payloads are the same contract for `info`/`schema`/`probe`/
   `search`; `preview` deliberately has two shapes (row reader vs sheet preview).
 - The MCP server keeps one Session per process, so a long-running server will
-  hold up to 8 workbooks open (descriptors and memory).
+  hold up to 8 workbooks open (descriptors and memory) plus up to 64 cached
+  profiles and 16 cached search payloads.
 
 ## CLI
 

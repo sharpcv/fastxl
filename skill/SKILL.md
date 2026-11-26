@@ -121,18 +121,28 @@ rows = fastxl.preview("book.xlsx", sheet="Data", rows=20)
 | `preview(file, ..., rows=20, offset=0)` | Typed rows as dicts (or lists) |
 | `preview_sheet(file, ..., rows=20, range="", columns="")` | CLI `preview` payload: used range, header row, merges, comments, tables, pivots, charts |
 | `read_rows(..., limit=20)` | Same as `preview`; `limit=0` reads all rows |
+| `iter_rows(...)` | Lazy row iterator (dicts or tuples); never materializes the sheet |
 | `write_xlsx(file, rows, ...)` | Atomic xlsx writer for dicts or sequences |
 
 `schema`/`probe` also take `format=`, `delimiter=`, `infer=`, `fill_gaps=`,
 `max_rows=`, `sample=`, `top=`, `distinct_cap=`, `jobs=`, `max_bytes=`.
-`preview`/`read_rows` also take `offset=`, `as_dicts=`, `max_columns=`,
-`max_bytes=`. For repeated calls against one file, `fastxl.Session()` caches the
-opened workbook (LRU 8, invalidated on `(mtime, size)`) and serves
-`info`/`schema`/`probe`/`search` from it:
+`preview`/`read_rows` also take `offset=`, `as_dicts=`, `as_tuples=`,
+`max_columns=`, `max_bytes=`; `iter_rows` takes the row-reader options without
+`max_bytes`. For repeated calls against one file, `fastxl.Session(capacity=8,
+memory_map=None, profile_capacity=64, search_capacity=16)` caches the opened
+workbook (LRU, invalidated on `(mtime, size)`), a bounded cache of profiling
+results for `schema`/`probe`, and a bounded cache of `search` payloads. A warm
+call with the same file and options skips the scan; `max_bytes` is not part of
+the key, so changing the output budget is cheap. `stats()` reports the workbook
+keys plus `profiles`/`profile_hits`/`profile_misses` and
+`searches`/`search_hits`/`search_misses`; `session.clear()` drops every cache:
 
 ```python
 with fastxl.Session() as session:
-    session.schema("book.xlsx", max_bytes=4000)
+    session.schema("book.xlsx", max_bytes=4000)   # scans once
+    session.schema("book.xlsx", max_bytes=2000)   # cached profile, cheap re-fold
+    session.search("book.xlsx", "invoice")        # cached by query + options
+    session.stats()
 ```
 
 Values are typed: `int`/`float`/`bool`/`None`/`str`. Dates, times and errors are
@@ -164,6 +174,21 @@ result["extra_cells"]   # cells right of the last header column (native only)
 Use `limit`/`rows` while exploring. `limit=0`/`rows=0` materializes the whole
 sheet and is only safe when the result is actually needed.
 
+For positional rows pass `as_tuples=True` (`read_rows`/`preview`): rows become
+tuples of cell values in column order, and `as_tuples` wins over `as_dicts`.
+For sheets too large to materialize, `fastxl.iter_rows(...)` yields one row at a
+time instead of building the whole result; it has no `max_bytes` budget and
+exposes `columns`, `header_row`, `sheet`, `rows_read` and `truncated` (set when
+`limit` stops the iteration early):
+
+```python
+it = fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
+                      as_tuples=True)
+for row in it:          # dicts by default, tuples with as_tuples=True
+    process(row)
+print(it.rows_read, it.columns)
+```
+
 ## Writing and converting
 
 `write_xlsx`/`write` collect dict keys across all rows in first-seen order, so a
@@ -189,7 +214,8 @@ path; run `fastxl-cli convert ... --out -` directly for binary stdout.
 2. `schema` (or `probe` for numeric stats and top values) to learn column
    names, types, nullability, distinct counts, and samples.
 3. `preview` for a few real rows; check dates, codes, blanks and error cells.
-4. Transform in Python with `read_rows` limits, or stream with `convert`.
+4. Transform in Python with `read_rows` limits or `iter_rows` streaming, or
+   stream with `convert`.
 5. Write a new file with `write_xlsx`; never overwrite the source in place.
 6. Re-probe the output with `schema`/`preview` before declaring success.
 
@@ -201,7 +227,8 @@ larger table. Do not assume column letters; use the schema names.
 
 - Probes are read-only. `write` and `convert` only touch the requested output.
 - `schema`/`probe` stream and never build a DOM; `preview` materializes only the
-  requested rows. `--max-rows` bounds profiling on very large sheets.
+  requested rows and `iter_rows` streams rows on demand. `--max-rows` bounds
+  profiling on very large sheets.
 - Header auto-detection is heuristic: a title row above an all-text table is not
   detected. Check `header_row` and, from the CLI, `header_candidates`.
 - Schema inference is statistical: no units, foreign keys, or enums beyond

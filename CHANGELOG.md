@@ -4,6 +4,50 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
+## Unreleased (v1.2.0)
+
+### Added
+
+- Python row streaming: `read_rows(..., as_tuples=True)` returns each row as a
+  tuple of cell values in column order instead of a dict (it takes precedence
+  over `as_dicts`; existing calls are unchanged), and `fastxl.iter_rows(...)` is
+  a lazy iterator over typed rows that never materializes the sheet. The
+  iterator exposes `columns`, `header_row`, `sheet` and `rows_read`, accepts the
+  same row-reader options as `read_rows`, and has no `max_bytes` budget;
+  `Session.iter_rows` has the same signature and streams from the file instead
+  of reusing the cached workbook. Per-column dict keys are now interned, so a
+  materialized `read_rows(0)` shares one key string per column and its RSS
+  drops.
+- `Session` result caching: `schema`/`probe` reuse a cached `SheetProfile` for
+  the same file `(mtime, size)`, sheet and profiling options, and `search`
+  caches its JSON payload keyed by query and options. New constructor arguments
+  `profile_capacity` (default 64) and `search_capacity` (default 16) bound the
+  caches; `.stats()` adds `profiles`, `profile_capacity`, `profile_hits`,
+  `profile_misses`, `searches`, `search_capacity`, `search_hits` and
+  `search_misses`. `session.clear()` drops all caches, and `max_bytes` is not
+  part of either key, so re-requesting the same result with a different budget
+  is cheap.
+- Benchmarks: multi-sheet (10–20 sheets) parallel read/write, streamed parallel
+  profiling of a worksheet part above 64 MiB, and pure C++20 throughput from
+  `projects/bench/bench.cpp`, alongside the existing single-sheet read/write and
+  probe-latency comparisons.
+
+### Changed
+
+- Documentation recommends `iter_rows`/`as_tuples=True` for full-table Python
+  reads and a warm `Session` for repeated probes; the README explains the
+  `in_memory_threshold` (64 MiB) buffering versus 256 KiB streaming-window
+  behavior and how to lower `in_memory_threshold`/`distinct_cap` on low-memory
+  hosts.
+- A warm `Session` now skips the scan for repeated `schema`/`probe`/`search`
+  calls instead of only removing the workbook parse; the old limitation note is
+  gone from `docs/limitations.md`.
+
+### Removed
+
+- The stale root draft `fastxl_v1_1_0_release_audit.md`; the v1.1.0 release
+  history lives in `docs/optimization-progress.md` and this changelog.
+
 ## v1.1.0
 
 ### Added — semantic fidelity

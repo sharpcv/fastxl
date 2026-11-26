@@ -1,8 +1,8 @@
 # fastxl 优化记录与进度
 
-> 日期：2026-11-25 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.1.0`
+> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`（开发中）
 > 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试
-> 本机验证平台：Windows 10 x64（原作者）、Linux x86_64（本轮）；CI 覆盖 Linux x64/arm64 与 Windows x64
+> 本机验证平台：Windows 10 x64（i7-14700 / MSVC 19.51）、Linux x86_64；CI 覆盖 Linux x64/arm64 与 Windows x64
 
 ---
 
@@ -33,6 +33,7 @@
 | M8 | 测试fixtures/脚本/bench、全量文档收尾 | ✅ 完成（CI 待首次运行） |
 | M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
 | R1.1 | v1.1.0 发版收口：仓库清理、版本号、契约校验、Sanitizer/no-exceptions 门禁、基准 | ✅ 完成 |
+| M9 | v1.2.0 优化：Python 位置/惰性行流式、`Session` 画像与检索缓存、多 Sheet/大 part 纯 C++ 基准 | ✅ 完成并验证（Windows x64 本机实测） |
 
 ---
 
@@ -260,7 +261,8 @@
 
 ### R1.1 — v1.1.0 发版收口
 
-对应 `fastxl_v1_1_0_release_audit.md` 的发版检查单。
+对应 v1.1.0 发版审计检查单（根目录的审计过程文件已在 v1.2.0 清理中删除，历史沉淀在
+本文件与 `CHANGELOG.md`）。
 
 **仓库清理**
 
@@ -309,6 +311,74 @@
 
   fastxl 的写数字包含默认的原子写 + fsync；物化全部行时内存高于 calamine（Python
   dict vs list），README 已注明适用场景。
+
+### M9 — v1.2.0 优化：Python 行流式、Session 缓存与吞吐基准
+
+对应 v1.2.0 审计提出的 4 项优化（P1/P2）：Python 全行读取 RSS、`Session` 热缓存、
+内存说明与多 Sheet/大 part 基准。
+
+**Python 行读取**
+
+- `read_rows(..., as_tuples=True)` 返回按列顺序的元组行（优先于 `as_dicts`，现有调用
+  不变）；新增惰性 `iter_rows()`（`RowIterator`），逐行解码、不物化整表，暴露
+  `columns` / `header_row` / `sheet` / `rows_read` / `truncated`，无 `max_bytes` 预算；
+  `Session.iter_rows` 提供同名接口但独立打开 reader、不复用缓存工作簿。
+- 每列 dict key 复用同一个 `py::str` 对象（interned），去掉逐行重复的列名字符串。
+  200k×8（`gen_fixtures.py --big --rows 200000 --cols 8`，55.9 MiB part，Windows x64，
+  独立进程峰值工作集，解释器+模块基线 22.8 MiB）：`read_rows(0)` dict 188.0 MiB /
+  0.71 s；`as_tuples=True` 157.1 MiB / 0.70 s；`as_dicts=False` 160.1 MiB / 0.70 s；
+  `iter_rows` 惰性消费 85.6 MiB / 0.67 s（≈298k rows/s）。该 part 小于 64 MiB
+  `in_memory_threshold`，`iter_rows` 的 62.6 MiB 增量主要是整块缓冲本身；更大的 part
+  走 256 KiB 流式窗口，内存有界。
+
+**Session 缓存**
+
+- 在原有工作簿 LRU 之外新增两层 LRU：`SheetProfile`（按文件 `(mtime, size)` + sheet +
+  `header_row`/`max_rows`/`sample`/`top`/`distinct_cap`/`regions`/`jobs` 键控，
+  `profile_capacity` 默认 64）与 `search` JSON 载荷（按 query + 选项键控、忽略
+  `max_bytes`，`search_capacity` 默认 16）。`stats()` 增加
+  `profiles`/`profile_capacity`/`profile_hits`/`profile_misses` 与
+  `searches`/`search_capacity`/`search_hits`/`search_misses`，原有工作簿 key 不变；
+  `clear()` 清空全部缓存。
+- `large.xlsx`（15k×10，Windows x64，MSVC 19.51 release，Python 3.15.0，5 次中位数）：
+  native 冷调用 `schema`/`probe`/`search` 为 38.75/37.39/72.94 ms，`Session` 热调用为
+  0.24/0.23/0.02 ms——热路径直接复用缓存画像/载荷，不再扫表。
+
+**基准扩展**
+
+- `perf_suite.py` 新增 `--sheets N`/`--sheets-rows N`（多 Sheet 组）与
+  `--large-rows N`/`--large-cols N`（>64 MiB 流式组），默认 0=关闭（原有单 Sheet
+  矩阵不变）；`--json`/`--write` 输出机器可读结果。`bench.cpp` 纯 C++20 路径
+  （Windows 10 x64 / i7-14700 / MSVC 19.51，独立进程、1 次预热 + 7 次中位数）：
+
+  | 工作负载 | 串行/`jobs=1` | 并行/`jobs=4` | 加速比 |
+  |---|---:|---:|---:|
+  | 多 Sheet read-all（12 表 × 20k × 8） | 611 ms | 185 ms | 3.30× |
+  | 多 Sheet profile-all | 929 ms | 362 ms | 2.57× |
+  | 多 Sheet 写（单线程产行 + commit 并行压缩） | 914 ms | 578 ms | 1.58× |
+  | >64 MiB profile（1M×8，274.5 MiB 未压缩） | 3,542 ms | 1,674 ms | 2.12× |
+
+  单 Sheet 200k×8 profile：`jobs=1` 639 ms → `jobs=4` 390 ms（1.64×）；>64 MiB 的
+  jobs=4 行 `parallel=true`，确认走流式并行 profiler。多 Sheet 读/画像按表并行（表内
+  强制 jobs=1），随表数扩展；`WorkBookWriter` 非线程安全，并行写仍是单线程产行、commit
+  时按表并行压缩，故并行写峰值 RSS 更高（12.2 → 97.1 MiB）。Windows 峰值工作集与
+  Linux `ru_maxrss` 口径不同，不跨平台比较。
+
+复现：
+
+```sh
+xmake build -y fastxl-bench
+python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
+  --sheets 12 --sheets-rows 20000 --large-rows 1000000 --large-cols 8 \
+  --write build/reports/performance.md
+```
+
+**内存说明**
+
+- README 补充内存说明：解压后 worksheet part ≤ `OpenOptions::in_memory_threshold`
+  （默认 64 MiB）整块缓冲，超过时切换 256 KiB 流式窗口；低内存环境可调低
+  `in_memory_threshold` 与 `distinct_cap`。`docs/limitations.md` 的 `Session` 条目
+  同步改为缓存行为、LRU 与内存注意事项；`CHANGELOG.md` 增加 v1.2.0 Unreleased 段。
 
 ---
 
@@ -427,7 +497,8 @@ pyright: 0 errors
 ### 验证边界
 
 - Windows x64（原作者 + CI）与 Linux x86_64（本次）已本地验证；Linux arm64 由新增 CI job 覆盖（首次运行结果待观察）。
-- 尚无正式 wall-clock benchmark 数据；不要在报告中引用未记录的加速比。
+- R1.1/M9 的探针延迟、读/写对比与多 Sheet/大 part 基准已记录在 `README.md` 与本文件 M9
+  小节；Windows 峰值工作集与 Linux `ru_maxrss` 口径不同，跨平台数字不可直接比较。
 
 ---
 
@@ -446,7 +517,7 @@ pyright: 0 errors
 | Python / MCP | `bindings/fastxl_module.cpp`、`bindings/python/fastxl/`、`projects/tools/fastxl_mcp.py` |
 | 输出预算 | `projects/fastxl-cli/src/json_budget.hpp` |
 | 测试 | `projects/tests/test_cli.py`、`test_python.py`、`test_mcp.py`、`fixtures/gen_fixtures.py` |
-| 基准 | `projects/bench/bench.py`、`perf_suite.py`、`python_overhead.py` |
+| 基准 | `projects/bench/bench.py`、`perf_suite.py`、`bench.cpp`、`python_overhead.py` |
 | CI | `.github/workflows/ci.yml` |
 | 契约 | `docs/probe.schema.json`、`docs/ai.md`、`docs/library.md` |
 

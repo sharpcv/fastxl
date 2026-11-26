@@ -198,7 +198,9 @@ section named `table` (or `--sheet`).
 Practical recipe for large files: `preview --rows 20` first to see the shape
 and header, then `schema --header-row auto --max-rows 200000 --jobs 4`. Use
 `preview --range` and `--columns` for wide sheets before paying for a full
-profile.
+profile. In Python, prefer `iter_rows` (optionally `as_tuples=True`) over a
+full `read_rows(0)` for large sheets: it streams rows without building the whole
+result in memory.
 
 ## Output budget
 
@@ -263,22 +265,45 @@ name or a 1-based index. `read_rows`/`preview` return typed rows (`int`, `float`
 `fastxl.Error`, a `RuntimeError` subclass carrying the stable fastxl code in
 `.code`.
 
+`read_rows(..., as_tuples=True)` returns each row as a tuple of typed cell
+values in column order instead of a dict (it takes precedence over
+`as_dicts=True`, and existing calls are unchanged). For a full-table read that
+must not materialize the sheet, use `iter_rows(...)`: it returns a lazy iterator
+over the same typed rows, exposes `columns`, `header_row`, `sheet`, `rows_read`
+and `truncated` (set when `limit` stops the iteration early), takes the
+row-reader options (`limit`, `offset`, `as_dicts`, `as_tuples`, `infer`,
+`delimiter`, `fill_gaps`, `max_columns`, `with_cells`) and has no `max_bytes`
+budget. `Session.iter_rows` has the same signature and streams from the file
+rather than the cached workbook.
+
 Every read function accepts `max_bytes=0` and returns the same `budget` object as
 the CLI. For repeated calls against the same file, keep a `Session`: it caches the
-opened workbook (shared strings and styles parsed once), invalidates the entry
-when the file's `(mtime, size)` changes, and evicts the least recently used entry
-past `capacity` (default 8):
+opened workbook (shared strings and styles parsed once) and holds bounded profile
+and search-result caches, so a warm `schema`/`probe`/`search` with the same file
+and options skips the scan. All layers are invalidated when the file's
+`(mtime, size)` changes; the workbook cache evicts the least recently used entry
+past `capacity` (default 8), and the result caches are bounded by
+`profile_capacity` (default 64) and `search_capacity` (default 16), which
+`session.clear()` drops along with everything else:
 
 ```python
 with fastxl.Session(capacity=8) as session:
     schema = session.schema("book.xlsx", max_bytes=4000)
     hits = session.search("book.xlsx", "invoice", max_hits=20)
-    print(session.stats())   # {'size': 1, 'capacity': 8, 'hits': 1, 'misses': 1}
+    print(session.stats())
+    # size, capacity, hits, misses                     -> workbook cache
+    # profiles, profile_capacity, profile_hits, profile_misses
+    # searches, search_capacity, search_hits, search_misses
 ```
 
+A cached profile is keyed by the sheet plus the profiling options (`header_row`,
+`max_rows`, `sample`, `top`, `distinct_cap`, `regions`, `jobs`); cached search
+payloads are keyed by query and options. `max_bytes` is not part of either key,
+so asking for the same result with a different output budget is cheap.
+
 `Session` covers `info`/`schema`/`probe`/`search` and `preview_sheet`
-(workbook-level parsing); `preview`/`read_rows` delegate to the streaming
-readers, which own their decompression stream.
+(workbook-level parsing); `preview`/`read_rows`/`iter_rows` delegate to the
+streaming readers, which own their decompression stream.
 
 `preview_sheet()` returns the sheet-preview contract (used range, resolved header
 row, merged cells, comments, tables, pivots, charts) that the CLI `preview`
@@ -307,9 +332,9 @@ is authored at `skill/` in this repository and documented in
 `projects/tools/fastxl_mcp.py` exposes the probes as MCP tools over stdio and is
 native-first: when the compiled module is importable (in-tree `build/python` or
 an installed package) it answers in-process through one long-lived
-`fastxl.Session`, so repeated calls skip the OPC and shared-string parse. Without
-the module, or with `FASTXL_FORCE_CLI=1` / `--cli-only`, it shells out to
-`fastxl-cli`:
+`fastxl.Session`, so repeated calls skip the OPC and shared-string parse and
+reuse the cached profiles/searches. Without the module, or with
+`FASTXL_FORCE_CLI=1` / `--cli-only`, it shells out to `fastxl-cli`:
 
 ```sh
 python projects/tools/fastxl_mcp.py                            # native when available
