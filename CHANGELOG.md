@@ -4,7 +4,7 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
-## Unreleased (v1.2.0)
+## v1.2.0
 
 ### Added
 
@@ -31,6 +31,9 @@ and only adds optional fields within a major version.
   profiling of a worksheet part above 64 MiB, and pure C++20 throughput from
   `projects/bench/bench.cpp`, alongside the existing single-sheet read/write and
   probe-latency comparisons.
+- A `release` GitHub Actions workflow (`.github/workflows/release.yml`) that
+  builds Linux x64, Linux arm64 and Windows x64 release zips from a tag,
+  generates `SHA256SUMS.txt` and attaches them to that tag's GitHub Release.
 
 ### Changed
 
@@ -42,6 +45,8 @@ and only adds optional fields within a major version.
 - A warm `Session` now skips the scan for repeated `schema`/`probe`/`search`
   calls instead of only removing the workbook parse; the old limitation note is
   gone from `docs/limitations.md`.
+- Version is `1.2.0` across `xmake.lua`, the CLI, the Python package and the MCP
+  server; the v1.1.0 release remains available as tag/release `v1.1.0`.
 
 ### Removed
 

@@ -1,6 +1,6 @@
 # fastxl 优化记录与进度
 
-> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`（开发中）
+> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`
 > 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试
 > 本机验证平台：Windows 10 x64（i7-14700 / MSVC 19.51）、Linux x86_64；CI 覆盖 Linux x64/arm64 与 Windows x64
 
@@ -33,7 +33,7 @@
 | M8 | 测试fixtures/脚本/bench、全量文档收尾 | ✅ 完成（CI 待首次运行） |
 | M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
 | R1.1 | v1.1.0 发版收口：仓库清理、版本号、契约校验、Sanitizer/no-exceptions 门禁、基准 | ✅ 完成 |
-| M9 | v1.2.0 优化：Python 位置/惰性行流式、`Session` 画像与检索缓存、多 Sheet/大 part 纯 C++ 基准 | ✅ 完成并验证（Windows x64 本机实测） |
+| M9 | v1.2.0 优化：Python 位置/惰性行流式、`Session` 画像与检索缓存、多 Sheet/大 part 纯 C++ 基准 | ✅ 完成并验证（Windows x64 本机实测；已发布 v1.2.0） |
 
 ---
 
@@ -378,7 +378,16 @@ python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
 - README 补充内存说明：解压后 worksheet part ≤ `OpenOptions::in_memory_threshold`
   （默认 64 MiB）整块缓冲，超过时切换 256 KiB 流式窗口；低内存环境可调低
   `in_memory_threshold` 与 `distinct_cap`。`docs/limitations.md` 的 `Session` 条目
-  同步改为缓存行为、LRU 与内存注意事项；`CHANGELOG.md` 增加 v1.2.0 Unreleased 段。
+  同步改为缓存行为、LRU 与内存注意事项；`CHANGELOG.md` 增加 v1.2.0 段。
+
+**发版**
+
+- 版本号升至 `1.2.0`（`xmake.lua`、CLI、Python 包、MCP server），`CHANGELOG.md` 的
+  `Unreleased (v1.2.0)` 转为正式 `v1.2.0` 段；`v1.2.0` annotated tag 指向本次发布
+  commit，GitHub Release 标记为 Latest（v1.1.0 保留为历史版本）。
+- 新增 `.github/workflows/release.yml`：按 tag 构建 Linux x64 / Linux arm64 /
+  Windows x64 预编译包，生成 `SHA256SUMS.txt` 并上传到对应 Release；v1.2.0 的产物
+  由该工作流生成并校验。
 
 ---
 
