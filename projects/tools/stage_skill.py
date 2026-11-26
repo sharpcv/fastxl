@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage the built CLI and Python module into the skill package.
 
-Run after `xmake build -y fastxl-cli fastxl-python`:
+Run after `xmake build -y fastxl_cli fastxl_python`:
 
     python projects/tools/stage_skill.py
 

@@ -5,7 +5,7 @@ The same script runs on any Python 3.8+ because the wrapper is pure ctypes.
 
 Usage:
     python projects/tests/test_c_abi.py
-    python projects/tests/test_c_abi.py --cli build/bin/fastxl-cli
+    python projects/tests/python/test_c_abi.py --cli build/bin/fastxl
 """
 
 import argparse
@@ -272,7 +272,7 @@ def session_checks(fastxl):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cli", help="path to fastxl-cli")
+    parser.add_argument("--cli", help="path to fastxl")
     arguments = parser.parse_args()
 
     cli = find_cli(arguments.cli)

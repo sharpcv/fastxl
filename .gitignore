@@ -8,7 +8,7 @@ compile_commands.json
 
 # Local DSH plugin experiments (e.g. plugins/fastxl-workbench) are developed in
 # this workspace but are not part of the fastxl release tree; keep bundled
-# binaries such as plugins/*/bin/fastxl-cli.exe out of `git add .`.
+# binaries such as plugins/*/bin/fastxl.exe out of `git add .`.
 plugins/
 
 # Python caches and link intermediates

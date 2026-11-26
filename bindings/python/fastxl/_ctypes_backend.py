@@ -104,7 +104,7 @@ def _load_library() -> ctypes.CDLL:
         return ctypes.CDLL(found)
     raise OSError(
         "cannot locate libfastxl.so/fastxl.dll; set FASTXL_LIBRARY or place the "
-        "library next to fastxl_ctypes"
+        "library next to the fastxl package"
     )
 
 

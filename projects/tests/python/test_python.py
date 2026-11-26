@@ -8,7 +8,7 @@ across threads, and parity with the CLI JSON contract.
 
 Usage:
     python projects/tests/test_python.py
-    python projects/tests/test_python.py --cli build/bin/fastxl-cli
+    python projects/tests/python/test_python.py --cli build/bin/fastxl
 """
 
 import argparse
@@ -612,7 +612,7 @@ def main():
     budget_checks(fastxl)
     streaming_checks(fastxl)
     thread_safety_checks(fastxl)
-    with tempfile.TemporaryDirectory(prefix="fastxl-python-") as directory:
+    with tempfile.TemporaryDirectory(prefix="fastxl-") as directory:
         session_checks(fastxl, Path(directory))
         session_cache_checks(fastxl, Path(directory))
         session_refresh_checks(fastxl, Path(directory))

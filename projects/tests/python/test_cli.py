@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""CLI integration checks for fastxl-cli.
+"""CLI integration checks for fastxl.
 
 Runs the built CLI against the checked-in fixtures and exercises info, probe,
 schema, convert, stdio streaming, projections and exit codes.
 
 Usage:
     python projects/tests/test_cli.py
-    python projects/tests/test_cli.py --cli build/bin/fastxl-cli.exe
+    python projects/tests/python/test_cli.py --cli build/bin/fastxl.exe
 """
 
 import argparse
@@ -61,7 +61,7 @@ def find_cli(explicit):
     ):
         if candidate.exists():
             return candidate
-    raise SystemExit("fastxl-cli not found; build it with `xmake build fastxl-cli`")
+    raise SystemExit("fastxl not found; build it with `xmake build fastxl_cli`")
 
 
 def test_info(cli):
@@ -628,7 +628,7 @@ def main():
     test_info(cli)
     test_probe(cli)
     test_schema(cli)
-    with tempfile.TemporaryDirectory(prefix="fastxl-cli-") as directory:
+    with tempfile.TemporaryDirectory(prefix="fastxl-") as directory:
         work_dir = Path(directory)
         test_convert(cli, work_dir)
         test_stdio(cli, work_dir)
