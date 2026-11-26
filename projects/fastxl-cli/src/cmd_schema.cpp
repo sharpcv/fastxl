@@ -13,6 +13,7 @@
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
+#include "reports.hpp"
 #include "fastxl/detail/json_budget.hpp"
 #include "metadata_json.hpp"
 #include "table.hpp"
@@ -205,7 +206,7 @@ void print_schema_table(const Json& root) {
 
 } // namespace
 
-int run_schema(const Args& args) {
+Json schema_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("schema takes exactly one file path");
   const std::string& input = args.positional[0];
   const Format format = resolve_format(args.from, input, "--from");
@@ -322,6 +323,11 @@ int run_schema(const Args& args) {
   root["defined_names"] = defined_names_json(defined_names);
   if (defined_names_truncated) root["defined_names_truncated"] = true;
   root["join_keys"] = join_keys_json(join_sheets);
+  return root;
+}
+
+int run_schema(const Args& args) {
+  Json root = schema_report(args);
   if (args.format == OutputFormat::Jsonl) {
     fastxl::detail::apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());

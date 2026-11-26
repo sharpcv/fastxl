@@ -1,5 +1,5 @@
 set_project("fastxl")
-FASTXL_PROJECT_VERSION = "1.2.1"
+FASTXL_PROJECT_VERSION = "1.3.0"
 set_version(FASTXL_PROJECT_VERSION)
 set_license("MIT")
 set_languages("c++20")
@@ -28,6 +28,7 @@ package("minizip-ng")
         local configs = {
             "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"),
             "-DBUILD_SHARED_LIBS=OFF",
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
             "-DMZ_ZLIB=ON",
             "-DMZ_ZLIB_FLAVOR=zlib",
             "-DMZ_BZIP2=OFF",
@@ -68,6 +69,7 @@ package("zlib-ng")
         local configs = {
             "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"),
             "-DBUILD_SHARED_LIBS=OFF",
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
             "-DZLIB_ENABLE_TESTS=OFF",
             "-DZLIBNG_ENABLE_TESTS=OFF",
             "-DWITH_GTEST=OFF",
@@ -90,7 +92,7 @@ add_requires("simdutf 8.2.0")
 add_requires("fmt 12.2.1")
 add_requires("nlohmann_json 3.12.0")
 
-includes("projects/fastxl-core", "projects/fastxl-cli", "bindings")
+includes("projects/fastxl-core", "projects/fastxl-cli", "projects/fastxl-c", "bindings")
 if os.isdir("projects/bench") then includes("projects/bench") end
 if os.isdir("projects/tests") then includes("projects/tests") end
 

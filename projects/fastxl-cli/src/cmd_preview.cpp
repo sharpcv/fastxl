@@ -16,6 +16,7 @@
 #include "headers.hpp"
 #include "metadata_json.hpp"
 #include "preview_json.hpp"
+#include "reports.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -83,7 +84,7 @@ void print_preview_output(const Args& args, const Json& root) {
 
 } // namespace
 
-int run_preview(const Args& args) {
+Json preview_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("preview takes exactly one file path");
   const std::string& input = args.positional[0];
   const Format format = resolve_format(args.from, input, "--from");
@@ -95,10 +96,8 @@ int run_preview(const Args& args) {
   if (format == Format::Xlsx) {
     WorkBook workbook = WorkBook::open(path);
     const size_t index = resolve_sheet_index(workbook, args.sheet);
-    Json root = build_xlsx_preview(workbook, index, input, range, wanted, args.max_cell_bytes,
-                                   args.header_auto, args.header_row);
-    print_preview_output(args, root);
-    return 0;
+    return build_xlsx_preview(workbook, index, input, range, wanted, args.max_cell_bytes,
+                              args.header_auto, args.header_row);
   }
 
   if (format != Format::Csv && format != Format::Jsonl)
@@ -120,9 +119,13 @@ int run_preview(const Args& args) {
   }
   auto reader = open_reader(path, read_options);
   const std::string sheet_name = args.sheet.empty() ? "table" : args.sheet;
-  Json root = build_table_preview(input, format, sheet_name, range, wanted,
-                                  args.max_cell_bytes, args.header_auto, args.header_row,
-                                  *reader);
+  return build_table_preview(input, format, sheet_name, range, wanted,
+                             args.max_cell_bytes, args.header_auto, args.header_row,
+                             *reader);
+}
+
+int run_preview(const Args& args) {
+  Json root = preview_report(args);
   print_preview_output(args, root);
   return 0;
 }

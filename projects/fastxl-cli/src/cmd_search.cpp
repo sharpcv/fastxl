@@ -10,6 +10,7 @@
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
 #include "fastxl/detail/json_budget.hpp"
+#include "reports.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -40,7 +41,7 @@ Json hit_json(const SearchHit& hit) {
 
 } // namespace
 
-int run_search(const Args& args) {
+Json search_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("search takes exactly one file path");
   if (args.query.empty()) throw UsageError("search requires --query");
   const std::string& input = args.positional[0];
@@ -81,29 +82,35 @@ int run_search(const Args& args) {
     throw UsageError("search supports xlsx, csv and jsonl");
   }
 
+  Json root;
+  root["version"] = 1;
+  root["ok"] = true;
+  root["file"] = input;
+  root["query"] = options.query;
+  root["regex"] = options.regex;
+  root["ignore_case"] = options.ignore_case;
+  Json matches = Json::array();
+  for (const SearchHit& hit : result.hits) matches.push_back(hit_json(hit));
+  root["matches"] = std::move(matches);
+  root["match_count"] = result.hits.size();
+  root["truncated"] = result.truncated;
+  root["searched_cells"] = result.searched_cells;
+  return root;
+}
+
+int run_search(const Args& args) {
+  Json root = search_report(args);
   if (args.format == OutputFormat::Jsonl) {
-    Json root;
-    root["version"] = 1;
-    root["ok"] = true;
-    root["file"] = input;
-    root["query"] = options.query;
-    root["regex"] = options.regex;
-    root["ignore_case"] = options.ignore_case;
-    Json matches = Json::array();
-    for (const SearchHit& hit : result.hits) matches.push_back(hit_json(hit));
-    root["matches"] = std::move(matches);
-    root["match_count"] = result.hits.size();
-    root["truncated"] = result.truncated;
-    root["searched_cells"] = result.searched_cells;
     fastxl::detail::apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());
     return 0;
   }
 
-  for (const SearchHit& hit : result.hits) {
-    fmt::print("{}!{} {} {}\n", hit.sheet, hit.ref, hit.field, hit.text);
+  for (const auto& hit : root["matches"]) {
+    fmt::print("{}!{} {} {}\n", hit["sheet"].get<std::string>(), hit["ref"].get<std::string>(),
+               hit["field"].get<std::string>(), hit["text"].get<std::string>());
   }
-  if (result.truncated) fmt::print("… more matches; increase --max-hits\n");
+  if (root["truncated"].get<bool>()) fmt::print("… more matches; increase --max-hits\n");
   return 0;
 }
 

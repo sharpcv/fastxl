@@ -26,7 +26,7 @@ models and code generators can inspect spreadsheets without pandas or openpyxl.
 
 ```sh
 xmake f -y -m release
-xmake build -y fastxl-cli fastxl-python
+xmake build -y fastxl-cli fastxl-python fastxl-c
 ```
 
 On Windows add `-p windows -a x64` to the first command.
@@ -88,6 +88,27 @@ single JSON object with a stable error code. Pass `--format jsonl` (alias
 `--json`) to get them; the CLI default is human-readable. The contract is
 described by [`docs/probe.schema.json`](docs/probe.schema.json).
 
+### Python without a version-specific build
+
+`fastxl_ctypes` is a pure `ctypes` wrapper over the C ABI shared library. One
+built `libfastxl.so`/`fastxl.dll` serves CPython 3.8–3.15 (including
+free-threaded builds) and PyPy; no extension module is compiled per version.
+
+```python
+import fastxl_ctypes as fastxl
+
+with fastxl.Session() as session:
+    session.schema("book.xlsx", sheet="Data", header_row="auto")
+for row in fastxl.iter_rows("book.xlsx", sheet="Data", batch_size=4096,
+                            shape="objects"):
+    ...
+fastxl.convert("book.xlsx", "book.csv", sheet="Data")
+```
+
+Build it with `xmake build -y fastxl-c`; the package is copied to
+`build/lib/fastxl_ctypes`. See [`docs/c-abi.md`](docs/c-abi.md) for the C and
+C++ surfaces.
+
 ## Errors and exit codes
 
 Bare `fastxl-cli` (or `fastxl-cli --help`) prints detailed usage to stdout and
@@ -123,6 +144,7 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 
 - [`docs/ai.md`](docs/ai.md) — AI contract, CLI/JSON schema, Python binding API.
 - [`docs/library.md`](docs/library.md) — C++ library guide.
+- [`docs/c-abi.md`](docs/c-abi.md) — C ABI SDK (headers, shared library, ctypes).
 - [`docs/limitations.md`](docs/limitations.md) — honest list of what is not supported.
 - [`docs/optimization-progress.md`](docs/optimization-progress.md) — optimization
   log, milestone status and verification record.
@@ -135,9 +157,9 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 ```text
 build/      generated CLI, library, headers, Python package and release zip (gitignored)
 bindings/   pybind11 source and package __init__.py
+projects/   core sources, CLI, C ABI SDK and tools
 skill/      self-contained AI skill (keeps final CLI and module)
 docs/       library guide, AI contract, JSON Schema and limitations
-projects/   core sources, CLI and tools
 ```
 
 ## Build from source
@@ -340,17 +362,30 @@ a fresh checkout builds them first (the Python suites also regenerate them when
 missing):
 
 ```sh
-xmake build -y fastxl-tests fastxl-cli fastxl-python
+xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
 python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
 ./build/linux/x86_64/release/fastxl-tests   # build/windows/x64/release/fastxl-tests.exe on Windows
 python projects/tests/test_cli.py
 python projects/tests/test_python.py
 python projects/tests/test_mcp.py
+python projects/tests/test_c_abi.py
 ```
 
 `test_cli.py` and `test_mcp.py` only need `fastxl-cli`; `test_python.py` also
-needs the native module built for the same interpreter. CI runs all three on
-Linux x64, Linux arm64 and Windows x64.
+needs the native module built for the same interpreter; `test_c_abi.py` needs
+`fastxl-c` and checks C ABI/CLI parity, streaming, the writer and conversion.
+The pure C and C++ smoke tests are compiled directly:
+
+```sh
+cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
+  projects/fastxl-c/tests/test_c_abi.c -Lbuild/lib -lfastxl \
+  -Wl,-rpath,"$PWD/build/lib" -o build/test_c_abi
+c++ -std=c++20 -Wall -Wextra -Iprojects/fastxl-c/include \
+  projects/fastxl-c/tests/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
+  -Wl,-rpath,"$PWD/build/lib" -o build/test_cxx_abi
+```
+
+CI runs all of them on Linux x64, Linux arm64 and Windows x64.
 
 Probe-layer timings — CLI vs native, plain vs `--max-bytes`, and the
 `Session` warm cache — come from `projects/bench/bench.py`:

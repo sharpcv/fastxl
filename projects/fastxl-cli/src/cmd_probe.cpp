@@ -13,6 +13,7 @@
 #include "fastxl/fastxl.hpp"
 #include "headers.hpp"
 #include "fastxl/detail/json_budget.hpp"
+#include "reports.hpp"
 #include "metadata_json.hpp"
 #include "table.hpp"
 
@@ -280,7 +281,7 @@ void print_probe_table(const Json& root) {
 
 } // namespace
 
-int run_probe(const Args& args) {
+ProbeReport build_probe_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("probe takes exactly one file path");
   const std::string& input = args.positional[0];
   const Format format = resolve_format(args.from, input, "--from");
@@ -344,13 +345,19 @@ int run_probe(const Args& args) {
   Json root = profile_json(profile);
   root["header_auto"] = args.header_auto;
   root["defined_names"] = defined_names_json(defined_names);
+  return ProbeReport{std::move(profile), std::move(defined_names), std::move(root)};
+}
+
+int run_probe(const Args& args) {
+  ProbeReport report = build_probe_report(args);
+  Json& root = report.root;
   if (args.format == OutputFormat::Jsonl) {
     fastxl::detail::apply_output_budget(root, args.max_bytes);
     fmt::print("{}\n", root.dump());
   } else if (args.format == OutputFormat::Table) {
     print_probe_table(root);
   } else {
-    print_profile_text(profile);
+    print_profile_text(report.profile);
   }
   return 0;
 }

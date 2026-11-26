@@ -11,13 +11,16 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 
 #include "common.hpp"
 #include "fastxl/fastxl.hpp"
+#include "reports.hpp"
 
 namespace fastxl_cli {
 
 using namespace fastxl;
+using Json = nlohmann::ordered_json;
 
 namespace {
 
@@ -144,7 +147,7 @@ private:
   uint32_t max_col_ = 0;
 };
 
-int convert_xlsx_to_xlsx(const Args& args, const std::vector<size_t>& projection) {
+Json convert_xlsx_to_xlsx(const Args& args, const std::vector<size_t>& projection) {
   const auto started = std::chrono::steady_clock::now();
   const std::filesystem::path input_path = path_from_utf8(args.positional[0]);
   WorkBook workbook = WorkBook::open(input_path);
@@ -194,15 +197,21 @@ int convert_xlsx_to_xlsx(const Args& args, const std::vector<size_t>& projection
   const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
   const double cells = static_cast<double>(total_rows) * static_cast<double>(max_col);
   const double cells_per_second = ms > 0 ? cells / (static_cast<double>(ms) / 1000.0) : 0.0;
-  fmt::print(stderr,
-             "converted {} rows x {} cols, xlsx -> xlsx, {} ms, {:.0f} cells/s, "
-             "errors={}, invalid={}, extra=0\n",
-             total_rows, max_col, ms, cells_per_second, total_errors, total_invalid);
-  return 0;
+  Json stats;
+  stats["source_format"] = std::string(to_string(Format::Xlsx));
+  stats["target_format"] = std::string(to_string(Format::Xlsx));
+  stats["rows"] = total_rows;
+  stats["max_col"] = max_col;
+  stats["errors"] = total_errors;
+  stats["invalid"] = total_invalid;
+  stats["extra"] = 0;
+  stats["ms"] = std::max<int64_t>(ms, 0);
+  stats["cells_per_second"] = cells_per_second;
+  return stats;
 }
 
-int convert_tables(const Args& args, Format source_format, Format target_format,
-                   const std::vector<size_t>& projection) {
+Json convert_tables(const Args& args, Format source_format, Format target_format,
+                    const std::vector<size_t>& projection) {
   const auto started = std::chrono::steady_clock::now();
   const std::string& input = args.positional[0];
   const std::string& output = args.out;
@@ -297,16 +306,21 @@ int convert_tables(const Args& args, Format source_format, Format target_format,
   const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
   const double cells = static_cast<double>(rows) * static_cast<double>(column_views.size());
   const double cells_per_second = ms > 0 ? cells / (static_cast<double>(ms) / 1000.0) : 0.0;
-  fmt::print(stderr,
-             "converted {} rows x {} cols, {} -> {}, {} ms, {:.0f} cells/s, errors={}, extra={}\n",
-             rows, column_views.size(), to_string(source_format), to_string(target_format), ms,
-             cells_per_second, errors, reader->extra_cells());
-  return 0;
+  Json stats;
+  stats["source_format"] = std::string(to_string(source_format));
+  stats["target_format"] = std::string(to_string(target_format));
+  stats["rows"] = rows;
+  stats["columns"] = column_views.size();
+  stats["errors"] = errors;
+  stats["extra"] = reader->extra_cells();
+  stats["ms"] = std::max<int64_t>(ms, 0);
+  stats["cells_per_second"] = cells_per_second;
+  return stats;
 }
 
 } // namespace
 
-int run_convert(const Args& args) {
+Json convert_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("convert takes exactly one input");
   if (args.out.empty()) throw UsageError("convert needs --out");
   if (args.header_auto)
@@ -324,6 +338,33 @@ int run_convert(const Args& args) {
       !is_stdio(input) && !is_stdio(output))
     return convert_xlsx_to_xlsx(args, projection);
   return convert_tables(args, source_format, target_format, projection);
+}
+
+int run_convert(const Args& args) {
+  Json stats = convert_report(args);
+  const uint64_t cols = stats.contains("max_col") ? stats["max_col"].get<uint64_t>()
+                                                  : stats["columns"].get<uint64_t>();
+  if (stats.contains("invalid")) {
+    fmt::print(stderr,
+               "converted {} rows x {} cols, {} -> {}, {} ms, {:.0f} cells/s, "
+               "errors={}, invalid={}, extra={}\n",
+               stats["rows"].get<uint64_t>(), cols,
+               stats["source_format"].get<std::string>(),
+               stats["target_format"].get<std::string>(), stats["ms"].get<int64_t>(),
+               stats["cells_per_second"].get<double>(), stats["errors"].get<uint64_t>(),
+               stats["invalid"].get<uint64_t>(), stats["extra"].get<uint64_t>());
+  } else {
+    fmt::print(stderr,
+               "converted {} rows x {} cols, {} -> {}, {} ms, {:.0f} cells/s, "
+               "errors={}, extra={}\n",
+               stats["rows"].get<uint64_t>(), cols,
+               stats["source_format"].get<std::string>(),
+               stats["target_format"].get<std::string>(), stats["ms"].get<int64_t>(),
+               stats["cells_per_second"].get<double>(), stats["errors"].get<uint64_t>(),
+               stats["extra"].get<uint64_t>());
+  }
+  (void)args;
+  return 0;
 }
 
 } // namespace fastxl_cli

@@ -47,7 +47,7 @@ jobs:
         run: xmake f -y -m release
 
       - name: Build
-        run: xmake build -y fastxl-tests fastxl-cli fastxl-python
+        run: xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
 
       - name: Generate fixtures
         run: python3 projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -68,6 +68,22 @@ jobs:
           python3 projects/tests/test_cli.py
           python3 projects/tests/test_python.py
           python3 projects/tests/test_mcp.py
+
+      - name: C ABI SDK checks
+        run: |
+          cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
+            projects/fastxl-c/tests/test_c_abi.c -Lbuild/lib -lfastxl \
+            -Wl,-rpath,"$PWD/build/lib" -o build/test_c_abi
+          mkdir -p build/c-abi-tmp
+          build/test_c_abi projects/tests/fixtures/basic.xlsx build/c-abi-tmp
+          c++ -std=c++20 -Wall -Wextra -Iprojects/fastxl-c/include \
+            projects/fastxl-c/tests/test_cxx_abi.cpp -Lbuild/lib -lfastxl \
+            -Wl,-rpath,"$PWD/build/lib" -o build/test_cxx_abi
+          build/test_cxx_abi projects/tests/fixtures/basic.xlsx
+          nm -D --defined-only build/lib/libfastxl.so | awk '{print $3}' |
+            grep -v '^fastxl_' | test ! -s /dev/stdin
+          python3 projects/tests/test_c_abi.py
+          python3 projects/tools/package_sdk.py
 
   sanitizers:
     name: linux-sanitizers
@@ -140,7 +156,7 @@ jobs:
           xmake f -y -m release -p windows -a x64
 
       - name: Build
-        run: xmake build -y fastxl-tests fastxl-cli fastxl-python
+        run: xmake build -y fastxl-tests fastxl-cli fastxl-python fastxl-c
 
       - name: Generate fixtures
         run: python projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -158,3 +174,4 @@ jobs:
           python projects/tests/test_cli.py
           python projects/tests/test_python.py
           python projects/tests/test_mcp.py
+          python projects/tests/test_c_abi.py

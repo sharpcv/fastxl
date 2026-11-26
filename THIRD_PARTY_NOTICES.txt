@@ -1,0 +1,33 @@
+THIRD-PARTY NOTICES
+===================
+
+fastxl's binary SDK statically links the libraries below into
+libfastxl.so / fastxl.dll. Their symbols are hidden; the licenses require this
+notice in binary distributions.
+
+minizip-ng 4.2.2
+  https://github.com/zlib-ng/minizip-ng
+  License: zlib
+
+zlib-ng 2.3.3
+  https://github.com/zlib-ng/zlib-ng
+  License: zlib
+
+fast_float 8.3.3
+  https://github.com/fastfloat/fast_float
+  License: Apache-2.0 OR MIT
+
+simdutf 8.2.0
+  https://github.com/simdutf/simdutf
+  License: Apache-2.0 OR MIT
+
+fmt 12.2.1
+  https://github.com/fmtlib/fmt
+  License: MIT
+
+nlohmann_json 3.12.0
+  https://github.com/nlohmann/json
+  License: MIT
+
+The full license texts and copyright notices are distributed with each
+upstream project. fastxl itself is MIT licensed; see LICENSE.

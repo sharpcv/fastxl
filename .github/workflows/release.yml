@@ -53,15 +53,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-dev pybind11-dev
 
-      - name: Build CLI and Python module
+      - name: Build CLI, Python module and C SDK
         run: |
           xmake f -y -m release
-          xmake build -y fastxl-cli fastxl-python
+          xmake build -y fastxl-cli fastxl-python fastxl-c
 
       - name: Package
         run: |
           python3 projects/tools/stage_skill.py
           python3 projects/tools/package_release.py
+          python3 projects/tools/package_sdk.py
 
       - uses: actions/upload-artifact@v4
         with:
@@ -107,9 +108,10 @@ jobs:
       - name: Build and package
         shell: pwsh
         run: |
-          xmake build -y fastxl-cli fastxl-python
+          xmake build -y fastxl-cli fastxl-python fastxl-c
           python projects/tools/stage_skill.py
           python projects/tools/package_release.py
+          python projects/tools/package_sdk.py
 
       - uses: actions/upload-artifact@v4
         with:

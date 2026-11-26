@@ -11,6 +11,7 @@
 #include "fastxl/fastxl.hpp"
 #include "fastxl/detail/json_budget.hpp"
 #include "metadata_json.hpp"
+#include "reports.hpp"
 #include "table.hpp"
 
 namespace fastxl_cli {
@@ -45,7 +46,7 @@ void print_info_table(const Json& root) {
 
 } // namespace
 
-int run_info(const Args& args) {
+Json info_report(const Args& args) {
   if (args.positional.size() != 1) throw UsageError("info takes exactly one workbook path");
   const std::string& input = args.positional[0];
   const std::filesystem::path path = path_from_utf8(input);
@@ -92,6 +93,11 @@ int run_info(const Args& args) {
     sheets.push_back(std::move(entry));
   }
   root["sheets"] = std::move(sheets);
+  return root;
+}
+
+int run_info(const Args& args) {
+  Json root = info_report(args);
 
   if (args.format == OutputFormat::Jsonl) {
     fastxl::detail::apply_output_budget(root, args.max_bytes);
@@ -103,16 +109,17 @@ int run_info(const Args& args) {
     return 0;
   }
 
-  fmt::print("file: {}\n", file_utf8);
-  fmt::print("size_bytes: {}\n", size_bytes);
-  fmt::print("date1904: {}\n", workbook.date_1904() ? "true" : "false");
-  fmt::print("shared_strings: {}\n", workbook.shared_string_count());
-  fmt::print("sheets: {}\n", workbook.sheets().size());
-  for (size_t i = 0; i < workbook.sheets().size(); ++i) {
-    const WorkSheet& sheet = workbook.sheets()[i];
-    fmt::print("  [{}] {} ({}, {}) part={} bytes={}\n", i, sheet.name(),
-               sheet_kind_name(sheet.kind()), sheet_state_name(sheet.state()), sheet.part_name(),
-               sheet.uncompressed_bytes());
+  fmt::print("file: {}\n", root["file"].get<std::string>());
+  fmt::print("size_bytes: {}\n", root["size_bytes"].get<uint64_t>());
+  fmt::print("date1904: {}\n", root["date1904"].get<bool>() ? "true" : "false");
+  fmt::print("shared_strings: {}\n", root["shared_strings"].get<uint64_t>());
+  fmt::print("sheets: {}\n", root["sheets"].size());
+  for (const auto& sheet : root["sheets"]) {
+    fmt::print("  [{}] {} ({}, {}) part={} bytes={}\n",
+               sheet["index"].get<uint32_t>(), sheet["name"].get<std::string>(),
+               sheet["kind"].get<std::string>(), sheet["state"].get<std::string>(),
+               sheet["part"].get<std::string>(),
+               sheet["uncompressed_bytes"].get<uint64_t>());
   }
   return 0;
 }

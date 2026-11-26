@@ -4,6 +4,48 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
+## v1.3.0
+
+### Added
+
+- **C ABI binary SDK** (`projects/fastxl-c/`): one shared library
+  (`libfastxl.so` / `fastxl.dll`), `fastxl_c.h` (C11) and `fastxl_cxx.hpp`
+  (header-only C++20). The library statically absorbs minizip-ng, zlib-ng,
+  fast_float, simdutf, fmt and nlohmann_json with hidden symbols, so it exports
+  only `fastxl_*` and needs no third-party headers at link time. On Linux the
+  version script `projects/fastxl-c/fastxl.map` plus `--exclude-libs,ALL` keep
+  the ABI closed; `nm -D` shows 21 exports, all `fastxl_*`.
+- `fastxl_abi_version()` and options JSON: every probe accepts an optional
+  UTF-8 JSON object, unknown keys are ignored, and new options are added without
+  breaking the ABI. Status `0` is success; non-zero is `1 + fastxl::ErrorCode`
+  with a stable name from `fastxl_error_name()`.
+- C ABI entry points: session lifecycle, `info`/`preview`/`schema`/`probe`/
+  `search` JSON, `convert`, batched `iter_rows` (JSONL, default 4096 rows per
+  call) and a streaming JSONL writer for xlsx/csv/jsonl. All fallible entry
+  points are exception-safe and return library-owned buffers freed by
+  `fastxl_buffer_free()`.
+- Pure `ctypes` package `fastxl_ctypes` (CPython 3.8–3.15, free-threaded
+  builds, PyPy): `Session`, `iter_rows`, `write_rows`, `convert` and the probe
+  functions. `ctypes` releases the GIL around each call, and row streaming
+  crosses the ABI once per batch instead of once per row.
+- CLI report builders are now shared (`projects/fastxl-cli/src/reports.hpp`):
+  the C ABI and the CLI emit byte-identical payloads for the same options,
+  verified by `projects/tests/test_c_abi.py`.
+- Tests: pure C smoke test (`projects/tests/test_c_abi.c`), C++ wrapper test
+  (`test_cxx_abi.cpp`), ctypes/CLI parity, streaming, writer, convert and error
+  checks. CI builds `fastxl-c` on Linux and Windows and asserts the export list.
+- `projects/tools/package_sdk.py` emits
+  `build/fastxl-sdk-<version>-<platform>.zip` (headers, library, ctypes package,
+  `docs/c-abi.md`, `LICENSE`, `THIRD_PARTY_NOTICES.txt`); the release workflow
+  attaches it beside the existing release zip.
+
+### Changed
+
+- Linux package builds of minizip-ng and zlib-ng enable
+  `CMAKE_POSITION_INDEPENDENT_CODE` so they can be linked into the shared SDK.
+- Version is `1.3.0` across `xmake.lua`, the CLI, the Python package, the skill
+  mirror and the MCP server.
+
 ## v1.2.1
 
 ### Added
