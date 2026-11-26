@@ -149,7 +149,7 @@ jobs:
 
   publish:
     name: publish-assets
-    needs: [linux, windows]
+    needs: [linux, sdk-linux, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
