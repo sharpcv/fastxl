@@ -280,8 +280,32 @@ class SheetInfo(TypedDict):
     name: str
 
 RowsPayload: TypeAlias = (
-    list[dict[str, CellValue]] | list[list[CellValue]] | list[PreviewRow]
+    list[dict[str, CellValue]]
+    | list[list[CellValue]]
+    | list[tuple[CellValue, ...]]
+    | list[PreviewRow]
 )
+
+class RowIterator:
+    """Lazy typed-row iterator returned by ``iter_rows()``.
+
+    Decodes one row per ``next()`` call, so memory stays bounded for very large
+    sheets. The underlying reader stays open until the iterator is exhausted or
+    garbage collected; ``close()`` is not required.
+    """
+
+    @property
+    def columns(self) -> list[str]: ...
+    @property
+    def header_row(self) -> int: ...
+    @property
+    def sheet(self) -> str: ...
+    @property
+    def rows_read(self) -> int: ...
+    @property
+    def truncated(self) -> bool: ...
+    def __iter__(self) -> "RowIterator": ...
+    def __next__(self) -> dict[str, CellValue] | list[CellValue] | tuple[CellValue, ...] | PreviewRow: ...
 
 class PreviewResult(TypedDict):
     version: int
@@ -386,7 +410,23 @@ def read_rows(
     max_columns: int = 16384,
     with_cells: bool = False,
     max_bytes: int = 0,
+    as_tuples: bool = False,
 ) -> PreviewResult: ...
+def iter_rows(
+    file: str,
+    sheet: SheetSelector = None,
+    header_row: HeaderRow = 1,
+    format: str = "",
+    limit: int = 0,
+    offset: int = 0,
+    as_dicts: bool = True,
+    as_tuples: bool = False,
+    infer: bool = True,
+    delimiter: str = "",
+    fill_gaps: bool = False,
+    max_columns: int = 16384,
+    with_cells: bool = False,
+) -> RowIterator: ...
 def search(
     file: str,
     query: str,
@@ -413,15 +453,25 @@ def preview(
     max_columns: int = 16384,
     with_cells: bool = False,
     max_bytes: int = 0,
+    as_tuples: bool = False,
 ) -> PreviewResult: ...
 class Session:
-    """Caches opened workbooks so repeated probes skip the package parse.
+    """Caches workbooks, sheet profiles and search payloads for repeated probes.
 
-    Entries are keyed by path and invalidated when the file's mtime or size
-    changes; the least recently used entry is evicted past ``capacity``.
+    Workbook entries are keyed by path and invalidated when the file's mtime or
+    size changes; the least recently used entry is evicted past ``capacity``.
+    ``schema``/``probe`` reuse cached sheet profiles (``profile_capacity``), and
+    ``search`` reuses the untrimmed payload for an identical query
+    (``search_capacity``) so changing ``max_bytes`` never rescans the sheet.
     """
 
-    def __init__(self, capacity: int = 8, memory_map: bool | None = None) -> None: ...
+    def __init__(
+        self,
+        capacity: int = 8,
+        memory_map: bool | None = None,
+        profile_capacity: int = 64,
+        search_capacity: int = 16,
+    ) -> None: ...
     def preview_sheet(
         self,
         file: str,
@@ -499,7 +549,24 @@ class Session:
         max_columns: int = 16384,
         with_cells: bool = False,
         max_bytes: int = 0,
+        as_tuples: bool = False,
     ) -> PreviewResult: ...
+    def iter_rows(
+        self,
+        file: str,
+        sheet: SheetSelector = None,
+        header_row: HeaderRow = 1,
+        format: str = "",
+        limit: int = 0,
+        offset: int = 0,
+        as_dicts: bool = True,
+        as_tuples: bool = False,
+        infer: bool = True,
+        delimiter: str = "",
+        fill_gaps: bool = False,
+        max_columns: int = 16384,
+        with_cells: bool = False,
+    ) -> RowIterator: ...
     def preview(
         self,
         file: str,
@@ -515,11 +582,16 @@ class Session:
         max_columns: int = 16384,
         with_cells: bool = False,
         max_bytes: int = 0,
+        as_tuples: bool = False,
     ) -> PreviewResult: ...
     def clear(self) -> None: ...
     def stats(self) -> dict[str, int]: ...
     @property
     def capacity(self) -> int: ...
+    @property
+    def profile_capacity(self) -> int: ...
+    @property
+    def search_capacity(self) -> int: ...
     @property
     def memory_map(self) -> bool: ...
     def __len__(self) -> int: ...

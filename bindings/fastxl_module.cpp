@@ -1,5 +1,6 @@
 // Python bindings for fastxl. Exposes the probe/schema/preview surface as
-// native Python dicts plus a typed row reader and a small xlsx writer.
+// native Python dicts plus typed row readers (materialised `read_rows` and the
+// lazy `iter_rows`), a small xlsx writer and a caching `Session`.
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -448,6 +449,60 @@ std::string_view sheet_state_name(SheetState state) {
   return "visible";
 }
 
+// ---------------------------------------------------------------------------
+// Session cache infrastructure
+// ---------------------------------------------------------------------------
+
+// Identity of the file a cached result was derived from. Path, size and mtime
+// are folded into `key`, so a rewritten workbook naturally misses the cache.
+struct FileStamp {
+  std::string key;
+  uint64_t mtime_ns = 0;
+  uint64_t size = 0;
+};
+
+FileStamp stat_file(const std::filesystem::path& path) {
+  FileStamp stamp;
+  std::error_code ec;
+  stamp.size = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
+  if (ec) stamp.size = 0;
+  ec.clear();
+  const auto mtime = std::filesystem::last_write_time(path, ec);
+  if (!ec) {
+    stamp.mtime_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch()).count());
+  }
+  const auto u8 = path.lexically_normal().u8string();
+  stamp.key.assign(reinterpret_cast<const char*>(u8.data()), u8.size());
+  stamp.key += '\n';
+  stamp.key += std::to_string(stamp.size);
+  stamp.key += '\n';
+  stamp.key += std::to_string(stamp.mtime_ns);
+  return stamp;
+}
+
+// Length-prefixed fields keep keys unambiguous even when values contain the
+// separator (search queries may contain anything).
+void append_key_field(std::string& key, std::string_view value) {
+  key += '\n';
+  key += std::to_string(value.size());
+  key += ':';
+  key.append(value.data(), value.size());
+}
+
+void append_key_field(std::string& key, uint64_t value) {
+  append_key_field(key, std::to_string(value));
+}
+
+// A cache of read-only sheet profiles keyed by file identity plus the probe
+// options. fastxl.Session implements it; module-level helpers pass nullptr.
+class ProfileCache {
+public:
+  virtual ~ProfileCache() = default;
+  virtual const SheetProfile* find_profile(const std::string& key) = 0;
+  virtual void store_profile(const std::string& key, const SheetProfile& profile) = 0;
+};
+
 struct ProbeArgs {
   std::string file;
   std::string sheet;
@@ -476,6 +531,26 @@ ProfileOptions profile_options(const ProbeArgs& args) {
   return options;
 }
 
+std::string profile_key(const std::string& file_key, Format format, const ProbeArgs& args,
+                        size_t sheet_index) {
+  std::string key = file_key;
+  append_key_field(key, std::string(to_string(format)));
+  append_key_field(key, uint64_t{sheet_index});
+  append_key_field(key, std::string(args.sheet));
+  append_key_field(key, uint64_t{args.header_row});
+  append_key_field(key, static_cast<uint64_t>(args.header_auto ? 1 : 0));
+  append_key_field(key, uint64_t{args.max_rows});
+  append_key_field(key, uint64_t{args.sample});
+  append_key_field(key, uint64_t{args.top});
+  append_key_field(key, uint64_t{args.distinct_cap});
+  append_key_field(key, uint64_t{args.jobs});
+  append_key_field(key, static_cast<uint64_t>(args.regions ? 1 : 0));
+  append_key_field(key, static_cast<uint64_t>(args.infer ? 1 : 0));
+  append_key_field(key, static_cast<uint64_t>(args.fill_gaps ? 1 : 0));
+  append_key_field(key, uint64_t{static_cast<unsigned char>(args.delimiter)});
+  return key;
+}
+
 ReadOptions read_options(const ProbeArgs& args, Format format) {
   ReadOptions options;
   options.format = format;
@@ -500,17 +575,30 @@ struct ProbeBuild {
   std::vector<DefinedName> defined_names;
 };
 
-ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr) {
+ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr,
+                         ProfileCache* cache = nullptr) {
   const Format format = resolve_format(args.file, args.format);
   const std::filesystem::path path = utf8_path(args.file);
   ProfileOptions options = profile_options(args);
   ProbeBuild build;
+  const FileStamp stamp = cache == nullptr ? FileStamp{} : stat_file(path);
 
   if (format == Format::Xlsx) {
     std::optional<WorkBook> opened;
     if (cached == nullptr) opened.emplace(WorkBook::open(path));
     const WorkBook& workbook = cached != nullptr ? *cached : *opened;
     const size_t index = resolve_sheet_index(workbook, args.sheet);
+    const std::string key =
+        cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, index);
+    if (cache != nullptr) {
+      if (const SheetProfile* hit = cache->find_profile(key)) {
+        build.profile = *hit;
+        build.profile.file = args.file;
+        build.defined_names.assign(workbook.defined_names().begin(),
+                                   workbook.defined_names().end());
+        return build;
+      }
+    }
     if (args.header_auto) options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
     build.profile = profile_sheet(workbook, index, options);
     build.profile.file = args.file;
@@ -520,11 +608,22 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
       build.profile.regions =
           fastxl_cli::profile_regions(workbook, index, options, args.header_auto);
     }
+    if (cache != nullptr) cache->store_profile(key, build.profile);
     return build;
   }
 
   if (format != Format::Csv && format != Format::Jsonl)
     throw Exception(ErrorCode::UnsupportedFormat, "probe supports xlsx, csv and jsonl");
+
+  const std::string key =
+      cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, 0);
+  if (cache != nullptr) {
+    if (const SheetProfile* hit = cache->find_profile(key)) {
+      build.profile = *hit;
+      build.profile.file = args.file;
+      return build;
+    }
+  }
 
   ReadOptions options_read = read_options(args, format);
   if (args.header_auto && format == Format::Csv) {
@@ -548,6 +647,7 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
   auto reader = open_reader(path, options_read);
   build.profile = profile_table(*reader, options);
   build.profile.file = args.file;
+  if (cache != nullptr) cache->store_profile(key, build.profile);
   return build;
 }
 
@@ -623,8 +723,9 @@ ProbeArgs make_probe_args(const std::string& file, py::object sheet, py::object 
   return args;
 }
 
-Json probe_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
-  ProbeBuild build = build_profile(args, cached);
+Json probe_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
+                ProfileCache* cache = nullptr) {
+  ProbeBuild build = build_profile(args, cached, cache);
   Json root = profile_json(build.profile);
   root["header_auto"] = args.header_auto;
   root["defined_names"] = fastxl_cli::defined_names_json(build.defined_names);
@@ -655,7 +756,8 @@ py::dict probe(const std::string& file, py::object sheet, py::object header_row,
   return json_result(root, max_bytes);
 }
 
-Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
+Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
+                 ProfileCache* cache = nullptr) {
   const Format resolved = resolve_format(args.file, args.format);
   Json root;
   root["version"] = 1;
@@ -683,22 +785,48 @@ Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
         if (workbook.sheets()[i].kind() == SheetKind::Worksheet) indices.push_back(i);
       }
     }
-    std::vector<ProfileOptions> sheet_options;
-    sheet_options.reserve(indices.size());
-    for (size_t index : indices) {
-      ProfileOptions options = profile_options(args);
-      if (args.header_auto)
-        options.header_row = fastxl_cli::detect_header_xlsx(workbook, index).row;
-      sheet_options.push_back(options);
-    }
-    std::vector<SheetProfile> sheet_profiles =
-        profile_sheets(workbook, indices, std::span<const ProfileOptions>(sheet_options));
-    profiles = std::move(sheet_profiles);
-    if (args.regions) {
+    profiles.resize(indices.size());
+    std::vector<size_t> missing;
+    std::vector<std::string> keys(indices.size());
+    const FileStamp stamp = cache == nullptr ? FileStamp{} : stat_file(utf8_path(args.file));
+    if (cache != nullptr) {
       for (size_t i = 0; i < indices.size(); ++i) {
-        profiles[i].regions =
-            fastxl_cli::profile_regions(workbook, indices[i], sheet_options[i],
-                                        args.header_auto);
+        keys[i] = profile_key(stamp.key, resolved, args, indices[i]);
+        if (const SheetProfile* hit = cache->find_profile(keys[i])) {
+          profiles[i] = *hit;
+          continue;
+        }
+        missing.push_back(i);
+      }
+    } else {
+      missing.resize(indices.size());
+      for (size_t i = 0; i < indices.size(); ++i) missing[i] = i;
+    }
+    if (!missing.empty()) {
+      std::vector<size_t> missing_indices;
+      std::vector<ProfileOptions> missing_options;
+      missing_indices.reserve(missing.size());
+      missing_options.reserve(missing.size());
+      for (size_t position : missing) {
+        ProfileOptions options = profile_options(args);
+        if (args.header_auto)
+          options.header_row = fastxl_cli::detect_header_xlsx(workbook, indices[position]).row;
+        missing_indices.push_back(indices[position]);
+        missing_options.push_back(options);
+      }
+      std::vector<SheetProfile> fresh = profile_sheets(
+          workbook, missing_indices, std::span<const ProfileOptions>(missing_options));
+      if (args.regions) {
+        for (size_t k = 0; k < fresh.size(); ++k) {
+          fresh[k].regions = fastxl_cli::profile_regions(workbook, missing_indices[k],
+                                                        missing_options[k], args.header_auto);
+        }
+      }
+      for (size_t k = 0; k < fresh.size(); ++k) {
+        const size_t position = missing[k];
+        fresh[k].file = args.file;
+        if (cache != nullptr) cache->store_profile(keys[position], fresh[k]);
+        profiles[position] = std::move(fresh[k]);
       }
     }
     join_sheets.reserve(indices.size());
@@ -726,7 +854,7 @@ Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr) {
       sheets.push_back(std::move(section));
     }
   } else if (resolved == Format::Csv || resolved == Format::Jsonl) {
-    SheetProfile profile = build_profile(args).profile;
+    SheetProfile profile = build_profile(args, nullptr, cache).profile;
     sheets.push_back(schema_section_json(args.sheet.empty() ? "table" : args.sheet, 0, {},
                                          profile));
   } else {
@@ -801,135 +929,194 @@ std::string_view preview_type_name(CellType type) {
   return "unknown";
 }
 
-py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
-                   const std::string& format, size_t limit, size_t offset,
-                   bool as_dicts, bool infer, std::string delimiter, bool fill_gaps,
-                   size_t max_columns, bool with_cells, size_t max_bytes) {
-  ProbeArgs args;
-  args.file = file;
-  args.sheet = sheet_selector(sheet);
-  args.format = format;
-  args.infer = infer;
-  args.delimiter = delimiter_value(delimiter);
-  args.fill_gaps = fill_gaps;
-  args.header_row = header_value(header_row, args.header_auto);
+enum class RowShape { Dicts, Lists, Tuples };
 
-  const Format resolved = resolve_format(file, format);
+// Shared setup for the materialised read_rows()/preview() and the lazy
+// iter_rows() iterator. One instance owns the reader and the per-row
+// conversion state; `advance` converts exactly one row at a time so the iterator
+// path never materialises the whole sheet.
+struct RowStream {
+  std::string file;
+  ProbeArgs args;
+  Format resolved = Format::Auto;
+  ReadOptions options;
+  fastxl_cli::HeaderChoice choice;
+  std::unique_ptr<Reader> reader;
+  std::vector<std::string> names;
+  // One shared `str` per column name: every dict row references the same key
+  // objects instead of allocating a new string per cell (large RSS win).
+  std::vector<py::str> key_objects;
+  RowView row;
+  std::string scratch;
+  size_t limit = 0;
+  size_t offset = 0;
+  size_t skipped = 0;
+  size_t emitted = 0;
+  bool with_cells = false;
+  bool exhausted = false;
+  bool truncated = false;
+  RowShape shape = RowShape::Dicts;
+
+  bool advance(py::object& out) {
+    while (!exhausted) {
+      if (!reader->next(row)) {
+        exhausted = true;
+        return false;
+      }
+      if (skipped < offset) {
+        ++skipped;
+        continue;
+      }
+      if (limit != 0 && emitted >= limit) {
+        truncated = true;
+        exhausted = true;
+        return false;
+      }
+      if (with_cells) {
+        out = cells_row(row);
+      } else if (shape == RowShape::Dicts) {
+        py::dict record;
+        for (size_t i = 0; i < row.size() && i < key_objects.size(); ++i)
+          record[key_objects[i]] = cell_to_py(row[i], scratch);
+        out = std::move(record);
+      } else if (shape == RowShape::Lists) {
+        py::list record;
+        for (size_t i = 0; i < row.size(); ++i) record.append(cell_to_py(row[i], scratch));
+        out = std::move(record);
+      } else {
+        py::tuple record(row.size());
+        for (size_t i = 0; i < row.size(); ++i) record[i] = cell_to_py(row[i], scratch);
+        out = std::move(record);
+      }
+      ++emitted;
+      return true;
+    }
+    return false;
+  }
+
+  py::dict cells_row(const RowView& current) {
+    py::dict record;
+    record["number"] = current.number;
+    py::list cell_list;
+    const SheetStyle* styles = reader->styles();
+    for (size_t i = 0; i < current.size(); ++i) {
+      const CellView& cell = current[i];
+      if (cell.type == CellType::Null && !cell.has_formula) continue;
+      py::dict item;
+      item["col"] = cell.col;
+      item["letter"] = column_letters(cell.col);
+      item["ref"] = fastxl::cell_ref(cell.row, cell.col);
+      item["type"] = std::string(preview_type_name(cell.type));
+      item["text"] = std::string(to_text(cell, scratch));
+      if (cell.has_formula && !cell.formula.empty())
+        item["formula"] = std::string(cell.formula);
+      if (styles != nullptr) {
+        const CellStyleInfo info = styles->info(cell.style);
+        if (!info.num_fmt.empty() && info.num_fmt != "General")
+          item["num_fmt"] = std::string(info.num_fmt);
+        py::list style_flags;
+        if (info.flags.has_font_color) {
+          style_flags.append("font_color");
+          item["font_color"] = fastxl_cli::color_hex(info.flags.font_color);
+        }
+        if (info.flags.has_fill) {
+          style_flags.append("fill");
+          item["fill_color"] = fastxl_cli::color_hex(info.flags.fill_color);
+        }
+        if (info.flags.strike) style_flags.append("strike");
+        if (py::len(style_flags) > 0) item["style_flags"] = std::move(style_flags);
+      }
+      if (cell.type == CellType::Null && cell.has_formula) item["needs_recalc"] = true;
+      cell_list.append(std::move(item));
+    }
+    record["cells"] = std::move(cell_list);
+    return record;
+  }
+};
+
+std::unique_ptr<RowStream> open_row_stream(const std::string& file, py::object sheet,
+                                           py::object header_row, const std::string& format,
+                                           size_t limit, size_t offset, bool as_dicts,
+                                           bool as_tuples, bool infer, std::string delimiter,
+                                           bool fill_gaps, size_t max_columns,
+                                           bool with_cells) {
+  auto stream = std::make_unique<RowStream>();
+  stream->file = file;
+  stream->args.file = file;
+  stream->args.sheet = sheet_selector(sheet);
+  stream->args.format = format;
+  stream->args.infer = infer;
+  stream->args.delimiter = delimiter_value(delimiter);
+  stream->args.fill_gaps = fill_gaps;
+  stream->args.header_row = header_value(header_row, stream->args.header_auto);
+  stream->limit = limit;
+  stream->offset = offset;
+  stream->with_cells = with_cells;
+  if (with_cells) {
+    stream->shape = RowShape::Dicts;
+  } else if (as_tuples) {
+    stream->shape = RowShape::Tuples;
+  } else if (as_dicts) {
+    stream->shape = RowShape::Dicts;
+  } else {
+    stream->shape = RowShape::Lists;
+  }
+
+  stream->resolved = resolve_format(file, format);
   const std::filesystem::path path = utf8_path(file);
-  ReadOptions options = read_options(args, resolved);
+  ReadOptions options = read_options(stream->args, stream->resolved);
   options.max_rows = 0;
   options.max_columns = static_cast<uint32_t>(max_columns);
   options.lenient_columns = true;
 
-  fastxl_cli::HeaderChoice choice;
-  if (args.header_auto) {
-    if (resolved == Format::Xlsx) {
+  if (stream->args.header_auto) {
+    if (stream->resolved == Format::Xlsx) {
       WorkBook workbook = WorkBook::open(path);
-      choice = fastxl_cli::detect_header_xlsx(
-          workbook, resolve_sheet_index(workbook, args.sheet));
-      options.header_row = choice.row;
-    } else if (resolved == Format::Csv) {
-      const char delim = resolved_delimiter(args, path);
+      stream->choice = fastxl_cli::detect_header_xlsx(
+          workbook, resolve_sheet_index(workbook, stream->args.sheet));
+      options.header_row = stream->choice.row;
+    } else if (stream->resolved == Format::Csv) {
+      const char delim = resolved_delimiter(stream->args, path);
       ReadOptions scan_options = options;
       scan_options.header_row = 0;
       scan_options.max_rows = 0;
-      scan_options.column_count =
-          fastxl_cli::csv_column_count(path, delim, 20);
+      scan_options.column_count = fastxl_cli::csv_column_count(path, delim, 20);
       auto scan_reader = open_reader(path, scan_options);
-      choice = fastxl_cli::detect_header_table(*scan_reader);
-      options.header_row = choice.row;
+      stream->choice = fastxl_cli::detect_header_table(*scan_reader);
+      options.header_row = stream->choice.row;
       options.column_count = scan_options.column_count;
     } else {
       options.header_row = 0;
     }
   }
-
-  if (resolved == Format::Jsonl) options.header_row = 0;
-  auto reader = open_reader(path, options);
-  const auto raw_columns = reader->columns();
-  const std::vector<std::string> names = unique_names(raw_columns);
-
-  py::list rows;
-  RowView row;
-  size_t skipped = 0;
-  size_t emitted = 0;
-  bool truncated = false;
-  std::string scratch;
-  while (reader->next(row)) {
-    if (skipped < offset) {
-      ++skipped;
-      continue;
-    }
-    if (limit != 0 && emitted >= limit) {
-      truncated = true;
-      break;
-    }
-    if (with_cells) {
-      py::dict record;
-      record["number"] = row.number;
-      py::list cell_list;
-      const SheetStyle* styles = reader->styles();
-      for (size_t i = 0; i < row.size(); ++i) {
-        const CellView& cell = row[i];
-        if (cell.type == CellType::Null && !cell.has_formula) continue;
-        py::dict item;
-        item["col"] = cell.col;
-        item["letter"] = column_letters(cell.col);
-        item["ref"] = fastxl::cell_ref(cell.row, cell.col);
-        item["type"] = std::string(preview_type_name(cell.type));
-        item["text"] = std::string(to_text(cell, scratch));
-        if (cell.has_formula && !cell.formula.empty())
-          item["formula"] = std::string(cell.formula);
-        if (styles != nullptr) {
-          const CellStyleInfo info = styles->info(cell.style);
-          if (!info.num_fmt.empty() && info.num_fmt != "General")
-            item["num_fmt"] = std::string(info.num_fmt);
-          py::list style_flags;
-          if (info.flags.has_font_color) {
-            style_flags.append("font_color");
-            item["font_color"] = fastxl_cli::color_hex(info.flags.font_color);
-          }
-          if (info.flags.has_fill) {
-            style_flags.append("fill");
-            item["fill_color"] = fastxl_cli::color_hex(info.flags.fill_color);
-          }
-          if (info.flags.strike) style_flags.append("strike");
-          if (py::len(style_flags) > 0) item["style_flags"] = std::move(style_flags);
-        }
-        if (cell.type == CellType::Null && cell.has_formula) item["needs_recalc"] = true;
-        cell_list.append(std::move(item));
-      }
-      record["cells"] = std::move(cell_list);
-      rows.append(std::move(record));
-    } else if (as_dicts) {
-      py::dict record;
-      for (size_t i = 0; i < row.size() && i < names.size(); ++i)
-        record[py::str(names[i])] = cell_to_py(row[i], scratch);
-      rows.append(std::move(record));
-    } else {
-      py::list record;
-      for (size_t i = 0; i < row.size(); ++i) record.append(cell_to_py(row[i], scratch));
-      rows.append(std::move(record));
-    }
-    ++emitted;
+  if (stream->resolved == Format::Jsonl) options.header_row = 0;
+  stream->options = options;
+  stream->reader = open_reader(path, options);
+  stream->names = unique_names(stream->reader->columns());
+  if (stream->shape == RowShape::Dicts) {
+    stream->key_objects.reserve(stream->names.size());
+    for (const std::string& name : stream->names) stream->key_objects.emplace_back(name);
   }
+  return stream;
+}
 
+py::dict rows_payload(RowStream& stream, py::list rows, size_t max_bytes) {
   py::dict root;
   root["version"] = 1;
   root["ok"] = true;
-  root["file"] = file;
-  root["format"] = std::string(to_string(resolved));
-  const std::string_view sheet_name = reader->sheet_name();
+  root["file"] = stream.file;
+  root["format"] = std::string(to_string(stream.resolved));
+  const std::string_view sheet_name = stream.reader->sheet_name();
   const std::string resolved_sheet =
       sheet_name.empty() ? std::string("table") : std::string(sheet_name);
   root["sheet"] = resolved_sheet;
   py::dict sheet_info;
   sheet_info["name"] = resolved_sheet;
   root["sheet_info"] = std::move(sheet_info);
-  root["header_row"] = options.header_row;
-  root["header_auto"] = args.header_auto;
+  root["header_row"] = stream.options.header_row;
+  root["header_auto"] = stream.args.header_auto;
   py::list candidates;
-  for (const auto& candidate : choice.candidates) {
+  for (const auto& candidate : stream.choice.candidates) {
     py::dict item;
     item["row"] = candidate.row;
     item["score"] = candidate.score;
@@ -940,13 +1127,71 @@ py::dict read_rows(const std::string& file, py::object sheet, py::object header_
   }
   root["header_candidates"] = std::move(candidates);
   py::list columns;
-  for (const auto& name : names) columns.append(py::str(name));
+  for (const auto& name : stream.names) columns.append(py::str(name));
   root["columns"] = std::move(columns);
   root["rows"] = std::move(rows);
-  root["truncated"] = truncated;
-  root["rows_read"] = emitted;
-  root["extra_cells"] = reader->extra_cells();
+  root["truncated"] = stream.truncated;
+  root["rows_read"] = stream.emitted;
+  root["extra_cells"] = stream.reader->extra_cells();
   return budget_dict(std::move(root), max_bytes);
+}
+
+py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
+                   const std::string& format, size_t limit, size_t offset,
+                   bool as_dicts, bool infer, std::string delimiter, bool fill_gaps,
+                   size_t max_columns, bool with_cells, size_t max_bytes, bool as_tuples) {
+  std::unique_ptr<RowStream> stream = open_row_stream(
+      file, sheet, header_row, format, limit, offset, as_dicts, as_tuples, infer,
+      std::move(delimiter), fill_gaps, max_columns, with_cells);
+  py::list rows;
+  py::object converted;
+  while (stream->advance(converted)) rows.append(std::move(converted));
+  return rows_payload(*stream, std::move(rows), max_bytes);
+}
+
+// Lazy row iterator returned by iter_rows(). It keeps the reader open and
+// converts one row per __next__ call, so memory stays bounded for
+// multi-million-row sheets.
+class RowIterator {
+public:
+  explicit RowIterator(std::unique_ptr<RowStream> stream) : stream_(std::move(stream)) {}
+
+  RowIterator& iter() { return *this; }
+
+  py::object next() {
+    py::object converted;
+    if (!stream_->advance(converted)) throw py::stop_iteration();
+    return converted;
+  }
+
+  py::list columns() const {
+    py::list out;
+    for (const auto& name : stream_->names) out.append(py::str(name));
+    return out;
+  }
+
+  uint32_t header_row() const { return stream_->options.header_row; }
+
+  std::string sheet() const {
+    const std::string_view name = stream_->reader->sheet_name();
+    return name.empty() ? std::string("table") : std::string(name);
+  }
+
+  size_t rows_read() const { return stream_->emitted; }
+  bool truncated() const { return stream_->truncated; }
+
+private:
+  std::unique_ptr<RowStream> stream_;
+};
+
+std::unique_ptr<RowIterator> iter_rows(const std::string& file, py::object sheet,
+                                       py::object header_row, const std::string& format,
+                                       size_t limit, size_t offset, bool as_dicts,
+                                       bool as_tuples, bool infer, std::string delimiter,
+                                       bool fill_gaps, size_t max_columns, bool with_cells) {
+  return std::make_unique<RowIterator>(open_row_stream(
+      file, sheet, header_row, format, limit, offset, as_dicts, as_tuples, infer,
+      std::move(delimiter), fill_gaps, max_columns, with_cells));
 }
 
 Json search_json(const std::string& file, const SearchOptions& options,
@@ -1079,9 +1324,10 @@ py::dict preview_sheet(const std::string& file, py::object sheet, py::object hea
 py::dict preview(const std::string& file, py::object sheet, py::object header_row,
                  const std::string& format, size_t rows, size_t offset, bool as_dicts,
                  bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
-                 bool with_cells, size_t max_bytes) {
+                 bool with_cells, size_t max_bytes, bool as_tuples) {
   return read_rows(file, sheet, header_row, format, rows, offset, as_dicts, infer,
-                   std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
+                   std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes,
+                   as_tuples);
 }
 
 CellView python_cell(py::handle value, std::string& text) {
@@ -1183,17 +1429,37 @@ size_t write_xlsx(const std::string& file, py::object rows, py::object columns,
   return written;
 }
 
-// Reuses opened workbooks across calls. The MCP server keeps one Session for the
-// lifetime of the process, so several tool calls share a single parse of the OPC
-// package, shared strings and styles. An entry is invalidated when the file's
-// (mtime, size) changes, and the least recently used entry is evicted past the
-// capacity (8 by default).
-class Session {
+std::string search_key(const std::string& file_key, const SearchOptions& options,
+                       const std::string& format) {
+  std::string key = file_key;
+  append_key_field(key, "search");
+  append_key_field(key, format);
+  append_key_field(key, options.query);
+  append_key_field(key, static_cast<uint64_t>(options.regex ? 1 : 0));
+  append_key_field(key, static_cast<uint64_t>(options.ignore_case ? 1 : 0));
+  append_key_field(key, uint64_t{options.context});
+  append_key_field(key, uint64_t{options.max_hits});
+  append_key_field(key, uint64_t{options.max_cell_bytes});
+  append_key_field(key, options.sheet);
+  return key;
+}
+
+// Reuses opened workbooks, sheet profiles and repeated search payloads across
+// calls. The MCP server keeps one Session for the lifetime of the process, so
+// several tool calls share a single parse of the OPC package, and repeated
+// schema/probe/search calls reuse the profiling work instead of rescanning the
+// worksheet XML. Entries are keyed by file (path, mtime, size) plus the request
+// options, so a rewritten workbook naturally misses, and the least recently used
+// entry is evicted past the per-cache capacity.
+class Session : public ProfileCache {
 public:
   // `memory_map` defaults to off on Windows: a resident workbook keeps the
   // mapping alive, which makes Excel's save-replace of the same file fail.
-  Session(size_t capacity, py::object memory_map)
+  Session(size_t capacity, py::object memory_map, size_t profile_capacity,
+          size_t search_capacity)
       : capacity_(capacity == 0 ? 8 : capacity),
+        profile_capacity_(profile_capacity == 0 ? 64 : profile_capacity),
+        search_capacity_(search_capacity == 0 ? 16 : search_capacity),
         memory_map_(memory_map.is_none() ? default_memory_map()
                                          : py::cast<bool>(memory_map)) {}
 
@@ -1213,7 +1479,7 @@ public:
     ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
                                      std::move(delimiter), fill_gaps, max_rows, sample, top,
                                      distinct_cap, jobs, regions);
-    Json root = schema_json(args, cached_if_xlsx(file, format));
+    Json root = schema_json(args, cached_if_xlsx(file, format), this);
     return json_result(root, max_bytes);
   }
 
@@ -1224,7 +1490,7 @@ public:
     ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
                                      std::move(delimiter), fill_gaps, max_rows, sample, top,
                                      distinct_cap, jobs, regions);
-    Json root = probe_json(args, cached_if_xlsx(file, format));
+    Json root = probe_json(args, cached_if_xlsx(file, format), this);
     return json_result(root, max_bytes);
   }
 
@@ -1234,7 +1500,17 @@ public:
                   size_t max_bytes) {
     SearchOptions options = make_search_options(query, regex, ignore_case, context, max_hits,
                                                 max_cell_bytes, sheet);
-    Json root = search_json(file, options, format, cached_if_xlsx(file, format));
+    // max_bytes is intentionally absent from the key: the untrimmed payload is
+    // cached, so changing the output budget never rescans the sheet.
+    const std::string key = search_key(stat_file(utf8_path(file)).key, options, format);
+    Json root;
+    const Json* cached = find_search(key);
+    if (cached != nullptr) {
+      root = *cached;
+    } else {
+      root = search_json(file, options, format, cached_if_xlsx(file, format));
+      store_search(key, root);
+    }
     return json_result(root, max_bytes);
   }
 
@@ -1255,22 +1531,67 @@ public:
   py::dict read_rows(const std::string& file, py::object sheet, py::object header_row,
                      const std::string& format, size_t limit, size_t offset, bool as_dicts,
                      bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
-                     bool with_cells, size_t max_bytes) {
+                     bool with_cells, size_t max_bytes, bool as_tuples) {
     return ::read_rows(file, sheet, header_row, format, limit, offset, as_dicts, infer,
-                       std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
+                       std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes,
+                       as_tuples);
   }
 
   py::dict preview(const std::string& file, py::object sheet, py::object header_row,
                    const std::string& format, size_t rows, size_t offset, bool as_dicts,
                    bool infer, std::string delimiter, bool fill_gaps, size_t max_columns,
-                   bool with_cells, size_t max_bytes) {
+                   bool with_cells, size_t max_bytes, bool as_tuples) {
     return ::preview(file, sheet, header_row, format, rows, offset, as_dicts, infer,
-                     std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes);
+                     std::move(delimiter), fill_gaps, max_columns, with_cells, max_bytes,
+                     as_tuples);
+  }
+
+  std::unique_ptr<RowIterator> iter_rows(const std::string& file, py::object sheet,
+                                         py::object header_row, const std::string& format,
+                                         size_t limit, size_t offset, bool as_dicts,
+                                         bool as_tuples, bool infer, std::string delimiter,
+                                         bool fill_gaps, size_t max_columns, bool with_cells) {
+    return ::iter_rows(file, sheet, header_row, format, limit, offset, as_dicts, as_tuples,
+                       infer, std::move(delimiter), fill_gaps, max_columns, with_cells);
+  }
+
+  // ProfileCache: read-only sheet profiles reused by schema/probe.
+  const SheetProfile* find_profile(const std::string& key) override {
+    auto found = profiles_.find(key);
+    if (found == profiles_.end()) {
+      ++profile_misses_;
+      return nullptr;
+    }
+    ++profile_hits_;
+    profile_order_.splice(profile_order_.begin(), profile_order_, found->second.order);
+    return &found->second.profile;
+  }
+
+  void store_profile(const std::string& key, const SheetProfile& profile) override {
+    auto found = profiles_.find(key);
+    if (found != profiles_.end()) {
+      found->second.profile = profile;
+      profile_order_.splice(profile_order_.begin(), profile_order_, found->second.order);
+      return;
+    }
+    while (profiles_.size() >= profile_capacity_ && !profile_order_.empty()) {
+      profiles_.erase(profile_order_.back());
+      profile_order_.pop_back();
+    }
+    profile_order_.push_front(key);
+    ProfileEntry entry;
+    entry.profile = profile;
+    entry.order = profile_order_.begin();
+    profiles_.emplace(key, std::move(entry));
   }
 
   void clear() {
     entries_.clear();
     order_.clear();
+    profiles_.clear();
+    profile_order_.clear();
+    searches_.clear();
+    search_order_.clear();
   }
 
   py::dict stats() const {
@@ -1279,11 +1600,21 @@ public:
     out["capacity"] = capacity_;
     out["hits"] = hits_;
     out["misses"] = misses_;
+    out["profiles"] = profiles_.size();
+    out["profile_capacity"] = profile_capacity_;
+    out["profile_hits"] = profile_hits_;
+    out["profile_misses"] = profile_misses_;
+    out["searches"] = searches_.size();
+    out["search_capacity"] = search_capacity_;
+    out["search_hits"] = search_hits_;
+    out["search_misses"] = search_misses_;
     return out;
   }
 
   size_t capacity() const noexcept { return capacity_; }
   size_t size() const noexcept { return entries_.size(); }
+  size_t profile_capacity() const noexcept { return profile_capacity_; }
+  size_t search_capacity() const noexcept { return search_capacity_; }
   bool memory_map() const noexcept { return memory_map_; }
 
   static bool default_memory_map() noexcept {
@@ -1302,9 +1633,42 @@ private:
     std::list<std::string>::iterator order;
   };
 
+  struct ProfileEntry {
+    SheetProfile profile;
+    std::list<std::string>::iterator order;
+  };
+
+  struct SearchEntry {
+    Json root;
+    std::list<std::string>::iterator order;
+  };
+
   const WorkBook* cached_if_xlsx(const std::string& file, const std::string& format) {
     if (resolve_format(file, format) != Format::Xlsx) return nullptr;
     return &cached_workbook(file);
+  }
+
+  const Json* find_search(const std::string& key) {
+    auto found = searches_.find(key);
+    if (found == searches_.end()) {
+      ++search_misses_;
+      return nullptr;
+    }
+    ++search_hits_;
+    search_order_.splice(search_order_.begin(), search_order_, found->second.order);
+    return &found->second.root;
+  }
+
+  void store_search(const std::string& key, const Json& root) {
+    while (searches_.size() >= search_capacity_ && !search_order_.empty()) {
+      searches_.erase(search_order_.back());
+      search_order_.pop_back();
+    }
+    search_order_.push_front(key);
+    SearchEntry entry;
+    entry.root = root;
+    entry.order = search_order_.begin();
+    searches_.emplace(key, std::move(entry));
   }
 
   // Returns the cached workbook for `file`, opening and caching it when needed.
@@ -1352,10 +1716,20 @@ private:
 
   std::list<std::string> order_;
   std::unordered_map<std::string, Entry> entries_;
+  std::list<std::string> profile_order_;
+  std::unordered_map<std::string, ProfileEntry> profiles_;
+  std::list<std::string> search_order_;
+  std::unordered_map<std::string, SearchEntry> searches_;
   size_t capacity_ = 8;
+  size_t profile_capacity_ = 64;
+  size_t search_capacity_ = 16;
   bool memory_map_ = true;
   uint64_t hits_ = 0;
   uint64_t misses_ = 0;
+  uint64_t profile_hits_ = 0;
+  uint64_t profile_misses_ = 0;
+  uint64_t search_hits_ = 0;
+  uint64_t search_misses_ = 0;
 };
 
 PyObject* error_type = nullptr;
@@ -1380,8 +1754,8 @@ void translate_fastxl_error(std::exception_ptr p) {
 
 PYBIND11_MODULE(_fastxl, m) {
   m.doc() =
-      "Native fastxl bindings: info, schema, probe, preview, read_rows, search, "
-      "write_xlsx and Session";
+      "Native fastxl bindings: info, schema, probe, preview, read_rows, iter_rows, "
+      "search, write_xlsx and a caching Session";
   m.attr("__version__") = FASTXL_VERSION;
   m.attr("__build_python__") = py::make_tuple(PY_MAJOR_VERSION, PY_MINOR_VERSION);
   py::exception<fastxl::Exception> error(m, "Error", PyExc_RuntimeError);
@@ -1409,8 +1783,17 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("limit") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_columns") = 16384, py::arg("with_cells") = false,
-        py::arg("max_bytes") = 0,
-        "Read typed rows as dicts (or lists when as_dicts=False).");
+        py::arg("max_bytes") = 0, py::arg("as_tuples") = false,
+        "Read typed rows as dicts (or lists/tuples when as_dicts=False/as_tuples=True). "
+        "The whole payload is materialised; use iter_rows() for bounded memory.");
+  m.def("iter_rows", &iter_rows, py::arg("file"), py::arg("sheet") = py::none(),
+        py::arg("header_row") = py::int_(1), py::arg("format") = "",
+        py::arg("limit") = 0, py::arg("offset") = 0, py::arg("as_dicts") = true,
+        py::arg("as_tuples") = false, py::arg("infer") = true, py::arg("delimiter") = "",
+        py::arg("fill_gaps") = false, py::arg("max_columns") = 16384,
+        py::arg("with_cells") = false,
+        "Lazy row iterator: converts one row per next() so multi-million-row sheets "
+        "stay bounded in memory. limit=0 streams every row.");
   m.def("search", &search, py::arg("file"), py::arg("query"), py::arg("regex") = false,
         py::arg("ignore_case") = true, py::arg("context") = 1,
         py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
@@ -1427,21 +1810,34 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
         py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
         py::arg("max_columns") = 16384, py::arg("with_cells") = false,
-        py::arg("max_bytes") = 0,
+        py::arg("max_bytes") = 0, py::arg("as_tuples") = false,
         "Alias for read_rows with a rows= parameter; with_cells=True returns "
         "A1 refs and cell types.");
+  py::class_<RowIterator>(m, "RowIterator",
+                          "Lazy typed-row iterator returned by iter_rows(); one row is "
+                          "decoded per next() call.")
+      .def("__iter__", &RowIterator::iter)
+      .def("__next__", &RowIterator::next)
+      .def_property_readonly("columns", &RowIterator::columns)
+      .def_property_readonly("header_row", &RowIterator::header_row)
+      .def_property_readonly("sheet", &RowIterator::sheet)
+      .def_property_readonly("rows_read", &RowIterator::rows_read)
+      .def_property_readonly("truncated", &RowIterator::truncated);
   m.def("write_xlsx", &write_xlsx, py::arg("file"), py::arg("rows"),
         py::arg("columns") = py::none(), py::arg("sheet_name") = "Sheet1",
         py::arg("header") = true, py::arg("compression_level") = 6,
         "Write dicts or sequences to an xlsx workbook atomically.");
 
   py::class_<Session>(m, "Session",
-                      "Caches opened workbooks for repeated probes; entries expire "
-                      "when the file's mtime or size changes.")
-      .def(py::init<size_t, py::object>(), py::arg("capacity") = 8,
-           py::arg("memory_map") = py::none(),
+                      "Caches opened workbooks, sheet profiles and repeated search "
+                      "payloads for repeated probes; entries expire when the file's "
+                      "mtime or size changes.")
+      .def(py::init<size_t, py::object, size_t, size_t>(), py::arg("capacity") = 8,
+           py::arg("memory_map") = py::none(), py::arg("profile_capacity") = 64,
+           py::arg("search_capacity") = 16,
            "capacity = workbook cache size; memory_map = None (platform default: "
-           "off on Windows, on elsewhere), True or False.")
+           "off on Windows, on elsewhere), True or False; profile_capacity = cached "
+           "sheet profiles for schema/probe; search_capacity = cached search payloads.")
       .def("info", &Session::info, py::arg("file"), py::arg("format") = "",
            py::arg("max_bytes") = 0)
       .def("schema", &Session::schema, py::arg("file"), py::arg("sheet") = py::none(),
@@ -1465,7 +1861,13 @@ PYBIND11_MODULE(_fastxl, m) {
            py::arg("limit") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
            py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
            py::arg("max_columns") = 16384, py::arg("with_cells") = false,
-           py::arg("max_bytes") = 0)
+           py::arg("max_bytes") = 0, py::arg("as_tuples") = false)
+      .def("iter_rows", &Session::iter_rows, py::arg("file"), py::arg("sheet") = py::none(),
+           py::arg("header_row") = py::int_(1), py::arg("format") = "",
+           py::arg("limit") = 0, py::arg("offset") = 0, py::arg("as_dicts") = true,
+           py::arg("as_tuples") = false, py::arg("infer") = true,
+           py::arg("delimiter") = "", py::arg("fill_gaps") = false,
+           py::arg("max_columns") = 16384, py::arg("with_cells") = false)
       .def("preview_sheet", &Session::preview_sheet, py::arg("file"),
            py::arg("sheet") = py::none(), py::arg("header_row") = py::int_(1),
            py::arg("format") = "", py::arg("rows") = 20, py::arg("range") = "",
@@ -1475,10 +1877,15 @@ PYBIND11_MODULE(_fastxl, m) {
            py::arg("rows") = 20, py::arg("offset") = 0, py::arg("as_dicts") = true,
            py::arg("infer") = true, py::arg("delimiter") = "", py::arg("fill_gaps") = false,
            py::arg("max_columns") = 16384, py::arg("with_cells") = false,
-           py::arg("max_bytes") = 0)
-      .def("clear", &Session::clear, "Drop every cached workbook.")
-      .def("stats", &Session::stats, "Cache size, capacity, hits and misses.")
+           py::arg("max_bytes") = 0, py::arg("as_tuples") = false)
+      .def("clear", &Session::clear,
+           "Drop every cached workbook, sheet profile and search payload.")
+      .def("stats", &Session::stats,
+           "Cache sizes, capacities, hits and misses for the workbook, profile and "
+           "search caches.")
       .def_property_readonly("capacity", &Session::capacity)
+      .def_property_readonly("profile_capacity", &Session::profile_capacity)
+      .def_property_readonly("search_capacity", &Session::search_capacity)
       .def_property_readonly("memory_map", &Session::memory_map)
       .def("__len__", &Session::size)
       .def("__enter__", [](py::object self) { return self; })

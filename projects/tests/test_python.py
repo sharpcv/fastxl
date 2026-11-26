@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Native Python binding checks for fastxl.
 
-Covers the module functions, the ``max_bytes`` budget object, ``fastxl.Session``
-caching/invalidation and parity with the CLI JSON contract.
+Covers the module functions, the ``max_bytes`` budget object, positional/lazy row
+streaming (``as_tuples`` / ``iter_rows``), the ``fastxl.Session`` workbook,
+profile and search caches, and parity with the CLI JSON contract.
 
 Usage:
     python projects/tests/test_python.py
@@ -12,6 +13,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -187,6 +189,112 @@ def session_checks(fastxl, work_dir):
     check(session.stats()["hits"] == 1, "session: schema then search reuses")
 
 
+def streaming_checks(fastxl):
+    """as_tuples / list rows and the lazy iter_rows() surface."""
+    basic = str(FIXTURES / "basic.xlsx")
+
+    dicts = fastxl.read_rows(basic, limit=3)
+    lists = fastxl.read_rows(basic, limit=3, as_dicts=False)
+    tuples = fastxl.read_rows(basic, limit=3, as_tuples=True)
+    check(isinstance(dicts["rows"][0], dict), "rows: dict shape")
+    check(isinstance(lists["rows"][0], list), "rows: list shape")
+    check(isinstance(tuples["rows"][0], tuple), "rows: tuple shape")
+    check(dicts["columns"] == lists["columns"] == tuples["columns"], "rows: column parity")
+    check(tuple(dicts["rows"][0].values()) == tuples["rows"][0], "rows: tuple matches dict")
+    check(tuple(lists["rows"][0]) == tuples["rows"][0], "rows: tuple matches list")
+    check(fastxl.read_rows(basic, limit=1, as_dicts=True, as_tuples=True)["rows"][0]
+          == tuples["rows"][0], "rows: as_tuples wins over as_dicts")
+    check(dicts["truncated"] is True and tuples["truncated"] is True, "rows: truncated")
+
+    iterator = fastxl.iter_rows(basic, limit=3)
+    check(isinstance(iterator, fastxl.RowIterator), "iter_rows: type")
+    check(iterator.columns == dicts["columns"], "iter_rows: columns")
+    check(iterator.header_row == 1, "iter_rows: header_row")
+    check(iterator.sheet == dicts["sheet"], "iter_rows: sheet name")
+    rows = list(iterator)
+    check(len(rows) == 3 and isinstance(rows[0], dict), "iter_rows: dict rows")
+    check(iterator.rows_read == 3, "iter_rows: rows_read")
+    check(iterator.truncated is True, "iter_rows: truncated")
+    check(list(fastxl.iter_rows(basic, as_tuples=True, limit=1))[0] == tuples["rows"][0],
+          "iter_rows: tuple parity")
+    check(len(list(fastxl.iter_rows(basic, offset=1, limit=1))) == 1, "iter_rows: offset")
+    check(len(list(fastxl.iter_rows(basic, as_dicts=False, limit=1))[0]) == len(dicts["columns"]),
+          "iter_rows: list parity")
+    cell_rows = list(fastxl.iter_rows(basic, limit=1, with_cells=True))
+    check("cells" in cell_rows[0], "iter_rows: with_cells")
+
+    # A partially consumed iterator just stops; no budget is applied.
+    partial = fastxl.iter_rows(basic)
+    next(partial)
+    check(partial.rows_read == 1, "iter_rows: incremental next")
+
+
+def session_cache_checks(fastxl, work_dir):
+    """Session profile/search caches: parity, invalidation, budgets and caps."""
+    basic = str(FIXTURES / "basic.xlsx")
+    copy_path = str(work_dir / "cache.xlsx")
+    shutil.copy(basic, copy_path)
+
+    session = fastxl.Session()
+    cold = session.schema(copy_path)
+    warm = session.schema(copy_path)
+    check(cold == warm, "cache: schema warm parity")
+    stats = session.stats()
+    check(stats["profiles"] >= 1, "cache: profile stored")
+    check(stats["profile_hits"] >= 1, "cache: schema profile hit")
+
+    probe = session.probe(copy_path)
+    check([column["header"] for column in probe["columns"]]
+          == [column["name"] for column in cold["sheets"][0]["columns"]],
+          "cache: probe/schema profile parity")
+    check([column["non_null"] for column in probe["columns"]]
+          == [column["non_null"] for column in cold["sheets"][0]["columns"]],
+          "cache: probe/schema statistics parity")
+    check(session.stats()["profile_hits"] >= 2, "cache: probe reuses schema profile")
+
+    # Changing max_bytes reuses the cached profile instead of rescanning.
+    hits = session.stats()["profile_hits"]
+    budgeted = session.schema(copy_path, max_bytes=4000)
+    check(budgeted["budget"]["applied"] is True, "cache: budget applied")
+    check(session.stats()["profile_hits"] > hits, "cache: budget reuses profile")
+
+    # Search payload cache ignores max_bytes; repeated queries are cheap/equal.
+    first = session.search(copy_path, "a", max_hits=5)
+    second = session.search(copy_path, "a", max_hits=5)
+    check(first == second, "cache: search warm parity")
+    check(session.stats()["search_hits"] >= 1, "cache: search hit")
+    small = session.search(copy_path, "a", max_hits=5, max_bytes=600)
+    check(small["budget"]["applied"] is True, "cache: search budget applied")
+    check(session.stats()["search_hits"] >= 2, "cache: budget reuses cached search")
+
+    # A rewritten file (mtime change) misses both caches.
+    profile_misses = session.stats()["profile_misses"]
+    search_misses = session.stats()["search_misses"]
+    stamp = time.time() + 2
+    os.utime(copy_path, (stamp, stamp))
+    session.schema(copy_path)
+    session.search(copy_path, "a", max_hits=5)
+    stats = session.stats()
+    check(stats["profile_misses"] > profile_misses, "cache: mtime change reprofiles")
+    check(stats["search_misses"] > search_misses, "cache: mtime change research")
+
+    check(session.profile_capacity == 64 and session.search_capacity == 16,
+          "cache: default capacities")
+    session.clear()
+    stats = session.stats()
+    check(stats["size"] == 0 and stats["profiles"] == 0 and stats["searches"] == 0,
+          "cache: clear drops every layer")
+
+    tiny = fastxl.Session(capacity=1, profile_capacity=1, search_capacity=1)
+    first_copy = work_dir / "cache-a.xlsx"
+    second_copy = work_dir / "cache-b.xlsx"
+    shutil.copy(basic, first_copy)
+    shutil.copy(basic, second_copy)
+    tiny.probe(str(first_copy))
+    tiny.probe(str(second_copy))
+    check(tiny.stats()["profiles"] == 1, "cache: profile capacity evicts")
+
+
 def ensure_fixtures():
     """Regenerates the fixtures when missing or built by an older generator."""
     generator = FIXTURES / "gen_fixtures.py"
@@ -278,7 +386,8 @@ def audit_fixes(fastxl, cli, work_dir):
 
     # Session stores the preview cache and honours the memory_map policy.
     session = fastxl.Session()
-    check(session.memory_map is True, "session: mmap default on Linux")
+    check(session.memory_map is (sys.platform != "win32"),
+          "session: mmap platform default")
     session.preview_sheet(basic)
     session.preview_sheet(basic)
     check(session.stats()["hits"] == 1, "session: preview_sheet reuses the workbook")
@@ -331,8 +440,10 @@ def main():
     module_functions(fastxl)
     feature_fixtures(fastxl)
     budget_checks(fastxl)
+    streaming_checks(fastxl)
     with tempfile.TemporaryDirectory(prefix="fastxl-python-") as directory:
         session_checks(fastxl, Path(directory))
+        session_cache_checks(fastxl, Path(directory))
         cli_parity(fastxl, cli, Path(directory))
         audit_fixes(fastxl, cli, Path(directory))
 
