@@ -44,6 +44,10 @@ projects/bench/write_bench_rs/src/*
 !projects/bench/data/
 projects/bench/data/*
 !projects/bench/data/*.py
+!projects/bench/paths/
+projects/bench/paths/*
+!projects/bench/paths/*.cpp
+!projects/bench/paths/*.py
 
 # Python extension artifacts and link intermediates
 bindings/python/fastxl/_fastxl.lib

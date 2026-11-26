@@ -145,6 +145,8 @@ codes are library `fastxl::ErrorCode` values and have one-line explanations in
 - [`docs/ai.md`](docs/ai.md) — AI contract, CLI/JSON schema, Python binding API.
 - [`docs/library.md`](docs/library.md) — C++ library guide.
 - [`docs/c-abi.md`](docs/c-abi.md) — C ABI SDK (headers, shared library, ctypes).
+- [`docs/performance-1.3.0.md`](docs/performance-1.3.0.md) — C++ core vs C ABI
+  vs pybind11 vs ctypes measurements.
 - [`docs/limitations.md`](docs/limitations.md) — honest list of what is not supported.
 - [`docs/optimization-progress.md`](docs/optimization-progress.md) — optimization
   log, milestone status and verification record.
@@ -349,7 +351,15 @@ python projects/bench/compare_write.py --runs 3        # write: fastxl vs Rust/P
 python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
     --sheets 12 --sheets-rows 20000 --large-rows 1000000 --large-cols 8 \
     --write build/reports/performance.md               # pure C++ throughput
+python projects/bench/compare_paths.py --runs 7 --big-runs 3 \
+    --write build/reports/paths.md                     # core / C ABI / Python
 ```
+
+`compare_paths.py` builds `fastxl-bench-paths-native` and
+`fastxl-bench-paths-abi` (`xmake build -y fastxl-bench-paths-native
+fastxl-bench-paths-abi`) and compares them with pybind11 and ctypes on the same
+contract; results are written up in
+[`docs/performance-1.3.0.md`](docs/performance-1.3.0.md).
 
 `projects/bench/write_bench_rs/` is the `rust_xlsxwriter` helper (built with
 `cargo build --release` on first use by `compare_write.py`); `bindings/README.md`

@@ -38,6 +38,11 @@ and only adds optional fields within a major version.
   `build/fastxl-sdk-<version>-<platform>.zip` (headers, library, ctypes package,
   `docs/c-abi.md`, `LICENSE`, `THIRD_PARTY_NOTICES.txt`); the release workflow
   attaches it beside the existing release zip.
+- `projects/bench/compare_paths.py` compares the C++ core, the C ABI, pybind11
+  and ctypes through `fastxl-bench-paths-native` / `fastxl-bench-paths-abi`;
+  the results are in [`docs/performance-1.3.0.md`](docs/performance-1.3.0.md)
+  (C ABI within noise of the core, +2.7% on 200k-row streaming, ctypes gated by
+  per-row JSON decoding).
 
 ### Changed
 

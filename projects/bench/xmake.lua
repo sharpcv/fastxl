@@ -5,3 +5,18 @@ add_files("*.cpp")
 add_deps("fastxl-core")
 add_packages("fmt")
 set_rundir("$(projectdir)")
+
+-- Three-path comparison sources (see compare_paths.py): core C++ and C ABI.
+target("fastxl-bench-paths-native")
+set_kind("binary")
+set_default(false)
+add_files("paths/native.cpp")
+add_deps("fastxl-core")
+set_rundir("$(projectdir)")
+
+target("fastxl-bench-paths-abi")
+set_kind("binary")
+set_default(false)
+add_files("paths/abi.cpp")
+add_deps("fastxl-c")
+set_rundir("$(projectdir)")
