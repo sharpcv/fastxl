@@ -20,6 +20,7 @@ import ctypes
 import ctypes.util
 import json
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
@@ -257,6 +258,12 @@ class _SessionHandle:
             _lib.fastxl_session_destroy(self.handle)
             self.handle = None
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # interpreter shutdown can clear module globals
+            pass
+
 
 class Session:
     """Caches parsed workbooks, profiles and search payloads across calls."""
@@ -288,6 +295,11 @@ class Session:
     def closed(self) -> bool:
         return self._session.handle is None
 
+    def _live(self) -> "_SessionHandle":
+        if self._session.handle is None:
+            raise ValueError("session is closed")
+        return self._session
+
     def __enter__(self) -> "Session":
         return self
 
@@ -295,23 +307,22 @@ class Session:
         self.close()
 
     def clear(self) -> None:
-        if self._session.handle:
-            _lib.fastxl_session_clear(self._session.handle)
+        _lib.fastxl_session_clear(self._live().handle)
 
     def info(self, file: str, **options: Any) -> dict[str, Any]:
-        return _call_report(_lib.fastxl_info_json, self._session, file, options)
+        return _call_report(_lib.fastxl_info_json, self._live(), file, options)
 
     def preview(self, file: str, **options: Any) -> dict[str, Any]:
-        return _call_report(_lib.fastxl_preview_json, self._session, file, options)
+        return _call_report(_lib.fastxl_preview_json, self._live(), file, options)
 
     def schema(self, file: str, **options: Any) -> dict[str, Any]:
-        return _call_report(_lib.fastxl_schema_json, self._session, file, options)
+        return _call_report(_lib.fastxl_schema_json, self._live(), file, options)
 
     def probe(self, file: str, **options: Any) -> dict[str, Any]:
-        return _call_report(_lib.fastxl_probe_json, self._session, file, options)
+        return _call_report(_lib.fastxl_probe_json, self._live(), file, options)
 
     def search(self, file: str, query: str, **options: Any) -> dict[str, Any]:
-        return _call_report(_lib.fastxl_search_json, self._session, file, options, query)
+        return _call_report(_lib.fastxl_search_json, self._live(), file, options, query)
 
     def iter_rows(self, file: str, **options: Any) -> "RowIterator":
         # Row streams own a reader; they are not cached by the session.
@@ -351,8 +362,9 @@ def convert(src: str, dst: str, **options: Any) -> None:
 class RowIterator(Iterator[Any]):
     """Lazy batched row iterator over the C ABI JSONL stream.
 
-    Rows are tuples for shape="arrays" (default) and dicts for shape="objects".
-    `close()` releases the reader deterministically; iteration stops afterwards.
+    Rows are lists for shape="arrays" (default) and dicts for shape="objects".
+    `close()` releases the reader deterministically; iteration stops afterwards
+    and `closed` is true once the stream is exhausted or closed.
     """
 
     def __init__(self, file: str, options: Mapping[str, Any]) -> None:
@@ -377,7 +389,7 @@ class RowIterator(Iterator[Any]):
         _lib.fastxl_buffer_free(ctypes.byref(err))
         self._handle = iter_handle
         self._meta = json.loads(payload)
-        self._buffer: list[Any] = []
+        self._buffer: deque[Any] = deque()
         self._exhausted = False
 
     @property
@@ -438,8 +450,11 @@ class RowIterator(Iterator[Any]):
         _lib.fastxl_buffer_free(ctypes.byref(err))
         if rows.value == 0:
             self._exhausted = True
+            self.close()
             return
-        self._buffer.extend(json.loads(line) for line in payload.splitlines() if line)
+        # Only split on "\n": str.splitlines() also breaks on U+2028/U+2029,
+        # which are legal unescaped characters inside JSON strings.
+        self._buffer.extend(json.loads(line) for line in payload.split("\n") if line)
 
     def __iter__(self) -> "RowIterator":
         return self
@@ -449,7 +464,7 @@ class RowIterator(Iterator[Any]):
             if self._exhausted:
                 raise StopIteration
             self._fill()
-        return self._buffer.pop(0)
+        return self._buffer.popleft()
 
 
 def iter_rows(file: str, **options: Any) -> RowIterator:
@@ -509,6 +524,12 @@ class JsonlWriter:
         if self._handle:
             _lib.fastxl_writer_destroy(self._handle)
             self._handle = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # interpreter shutdown can clear module globals
+            pass
 
     def __enter__(self) -> "JsonlWriter":
         return self

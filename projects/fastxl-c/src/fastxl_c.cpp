@@ -4,6 +4,7 @@
 #include "fastxl_c.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <simdutf.h>
 
 #include "args.hpp"
 #include "common.hpp"
@@ -56,9 +58,11 @@ void release_buffer(fastxl_buffer_t* buffer) {
   zero_buffer(buffer);
 }
 
+// Overwrites the output struct without touching its previous contents: callers
+// routinely pass uninitialised stack structs, so a free() here would corrupt
+// the heap. fastxl_buffer_free() owns releasing anything the library returned.
 bool store_buffer(fastxl_buffer_t* buffer, std::string_view text) {
   if (buffer == nullptr) return true;
-  release_buffer(buffer);
   char* data = static_cast<char*>(std::malloc(text.size() + 1));
   if (data == nullptr) return false;
   if (!text.empty()) std::memcpy(data, text.data(), text.size());
@@ -77,7 +81,7 @@ template <class Function>
 int32_t guarded(fastxl_buffer_t* out_err, Function&& function) noexcept {
   try {
     function();
-    release_buffer(out_err);
+    zero_buffer(out_err);
     return kStatusOk;
   } catch (const fastxl_cli::UsageError& error) {
     return fail(out_err, status_for(ErrorCode::InvalidValue), error.what());
@@ -211,12 +215,17 @@ void key_field(std::string& key, std::string_view value) {
   key.append(value.data(), value.size());
 }
 
+std::string utf8_path_text(const fs::path& path) {
+  const std::u8string text = path.u8string();
+  return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
 std::string file_stamp_key(const std::string& file) {
   std::error_code ec;
-  const fs::path path = fastxl_cli::path_from_utf8(file);
+  const fs::path path = fastxl_cli::path_from_utf8(file).lexically_normal();
   const uintmax_t size = fs::file_size(path, ec);
   std::string key;
-  key_field(key, file);
+  key_field(key, utf8_path_text(path));
   key_field(key, ec ? std::string("?") : std::to_string(size));
   ec.clear();
   const auto mtime = fs::last_write_time(path, ec);
@@ -225,7 +234,8 @@ std::string file_stamp_key(const std::string& file) {
 }
 
 std::string cache_key(const char* kind, const std::string& file, const Json& options) {
-  Json relevant = options;
+  // Sort option keys so {"a":1,"b":2} and {"b":2,"a":1} share one entry.
+  nlohmann::json relevant = options;
   relevant.erase("max_bytes");
   std::string key;
   key_field(key, kind);
@@ -283,6 +293,7 @@ private:
 struct fastxl_session {
   mutable std::mutex mutex;
   LruCache info;
+  LruCache previews;
   LruCache profiles;
   LruCache searches;
 };
@@ -326,13 +337,15 @@ fastxl_status_t fastxl_session_create(const char* options_json,
                                       fastxl_session_t** out_session,
                                       fastxl_buffer_t* out_err) {
   if (out_session != nullptr) *out_session = nullptr;
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (out_session == nullptr)
       throw Exception(ErrorCode::InvalidValue, "out_session must not be NULL");
     const Json options = parse_options(options_json);
     auto session = std::make_unique<fastxl_session>();
     session->info.set_capacity(static_cast<size_t>(opt_uint(options, "capacity", 8)));
+    session->previews.set_capacity(
+        static_cast<size_t>(opt_uint(options, "preview_capacity", 4)));
     session->profiles.set_capacity(
         static_cast<size_t>(opt_uint(options, "profile_capacity", 64)));
     session->searches.set_capacity(
@@ -345,6 +358,7 @@ void fastxl_session_clear(fastxl_session_t* session) {
   if (session == nullptr) return;
   std::lock_guard<std::mutex> lock(session->mutex);
   session->info.clear();
+  session->previews.clear();
   session->profiles.clear();
   session->searches.clear();
 }
@@ -355,7 +369,7 @@ fastxl_status_t fastxl_info_json(fastxl_session_t* session, const char* file_utf
                                  const char* options_json, fastxl_buffer_t* out_json,
                                  fastxl_buffer_t* out_err) {
   zero_buffer(out_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -379,7 +393,7 @@ fastxl_status_t fastxl_preview_json(fastxl_session_t* session, const char* file_
                                     const char* options_json, fastxl_buffer_t* out_json,
                                     fastxl_buffer_t* out_err) {
   zero_buffer(out_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -395,7 +409,7 @@ fastxl_status_t fastxl_preview_json(fastxl_session_t* session, const char* file_
     args.columns = opt_string(options, "columns");
     args.max_cell_bytes = static_cast<size_t>(opt_uint(options, "max_cell_bytes", 256));
     const size_t max_bytes = max_bytes_of(options);
-    LruCache* cache = session != nullptr ? &session->profiles : nullptr;
+    LruCache* cache = session != nullptr ? &session->previews : nullptr;
     Json root = cached_report(
         session, cache, cache_key("preview", file, options),
         [&] { return fastxl_cli::preview_report(args); });
@@ -407,7 +421,7 @@ fastxl_status_t fastxl_schema_json(fastxl_session_t* session, const char* file_u
                                    const char* options_json, fastxl_buffer_t* out_json,
                                    fastxl_buffer_t* out_err) {
   zero_buffer(out_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -431,7 +445,7 @@ fastxl_status_t fastxl_probe_json(fastxl_session_t* session, const char* file_ut
                                   const char* options_json, fastxl_buffer_t* out_json,
                                   fastxl_buffer_t* out_err) {
   zero_buffer(out_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -455,7 +469,7 @@ fastxl_status_t fastxl_search_json(fastxl_session_t* session, const char* file_u
                                    const char* query_utf8, const char* options_json,
                                    fastxl_buffer_t* out_json, fastxl_buffer_t* out_err) {
   zero_buffer(out_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -494,7 +508,7 @@ fastxl_status_t fastxl_search_json(fastxl_session_t* session, const char* file_u
 
 fastxl_status_t fastxl_convert(const char* src_utf8, const char* dst_utf8,
                                const char* options_json, fastxl_buffer_t* out_err) {
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (src_utf8 == nullptr || *src_utf8 == '\0' || dst_utf8 == nullptr ||
         *dst_utf8 == '\0')
@@ -559,23 +573,75 @@ std::vector<std::string> unique_names(std::span<const std::string_view> raw) {
   return names;
 }
 
-Json cell_value(const CellView& cell, std::string& scratch) {
+// Appends `text` as a JSON string literal. Escaping and validation mirror
+// nlohmann's dump(): the five short control escapes, \u00XX for the remaining
+// C0 controls, `\"`/`\\`, raw UTF-8 otherwise, and an error on invalid UTF-8.
+void append_json_string(std::string& out, std::string_view text) {
+  if (!simdutf::validate_utf8(text.data(), text.size()))
+    // nlohmann::dump() reported invalid UTF-8 as a plain std::exception, which
+    // guarded() maps to Internal; keep that status stable.
+    throw Exception(ErrorCode::Internal, "cannot encode invalid UTF-8 text as JSON");
+  out += '"';
+  size_t run = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    const unsigned char byte = static_cast<unsigned char>(text[i]);
+    if (byte >= 0x20 && byte != '"' && byte != '\\') continue;
+    out.append(text.data() + run, i - run);
+    run = i + 1;
+    switch (byte) {
+    case '"': out += "\\\""; break;
+    case '\\': out += "\\\\"; break;
+    case '\b': out += "\\b"; break;
+    case '\f': out += "\\f"; break;
+    case '\n': out += "\\n"; break;
+    case '\r': out += "\\r"; break;
+    case '\t': out += "\\t"; break;
+    default: {
+      char escaped[7];
+      std::snprintf(escaped, sizeof(escaped), "\\u%04x", byte);
+      out.append(escaped, sizeof(escaped) - 1);
+      break;
+    }
+    }
+  }
+  out.append(text.data() + run, text.size() - run);
+  out += '"';
+}
+
+void append_json_cell(std::string& out, const CellView& cell, std::string& scratch) {
   switch (cell.type) {
   case CellType::Null:
-  case CellType::Invalid: return nullptr;
-  case CellType::Int: return cell.int_value;
+  case CellType::Invalid: out += "null"; return;
+  case CellType::Int: {
+    char digits[32];
+    const auto end = std::to_chars(digits, digits + sizeof(digits), cell.int_value).ptr;
+    out.append(digits, end);
+    return;
+  }
   case CellType::Number:
-    if (!std::isfinite(cell.number)) return std::string(to_text(cell, scratch));
-    return cell.number;
-  case CellType::Boolean: return cell.boolean;
+    if (!std::isfinite(cell.number)) {
+      append_json_string(out, to_text(cell, scratch));
+      return;
+    }
+    // json::dump() formats doubles with nlohmann::detail::to_chars(); calling
+    // it directly keeps the exact spelling (1.0, not 1) without building a
+    // throwaway json value and output adapter per cell.
+    {
+      char digits[32];
+      const char* end =
+          nlohmann::detail::to_chars(digits, digits + sizeof(digits), cell.number);
+      out.append(digits, static_cast<size_t>(end - digits));
+    }
+    return;
+  case CellType::Boolean: out += cell.boolean ? "true" : "false"; return;
   case CellType::SharedString:
-  case CellType::Text: return std::string(cell.text);
+  case CellType::Text: append_json_string(out, cell.text); return;
   case CellType::Date:
   case CellType::DateTime:
   case CellType::Time:
-  case CellType::Error: return std::string(to_text(cell, scratch));
+  case CellType::Error: append_json_string(out, to_text(cell, scratch)); return;
   }
-  return nullptr;
+  out += "null";
 }
 
 } // namespace
@@ -612,7 +678,7 @@ fastxl_status_t fastxl_iter_open(const char* file_utf8, const char* options_json
                                  fastxl_buffer_t* out_err) {
   if (out_iter != nullptr) *out_iter = nullptr;
   zero_buffer(out_meta_json);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (file_utf8 == nullptr || *file_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "file_utf8 must not be empty");
@@ -689,9 +755,11 @@ fastxl_status_t fastxl_iter_open(const char* file_utf8, const char* options_json
     meta["header_row"] = read.header_row;
     meta["header_auto"] = iter->header_auto;
     meta["columns"] = iter->columns;
-    *out_iter = iter.release();
     if (!store_buffer(out_meta_json, meta.dump()))
       throw Exception(ErrorCode::Internal, "cannot allocate the meta buffer");
+    // Only hand over ownership after every fallible step finished; otherwise a
+    // throwing dump()/store_buffer() leaks the reader and its file descriptor.
+    *out_iter = iter.release();
   });
 }
 
@@ -699,7 +767,7 @@ fastxl_status_t fastxl_iter_next_batch(fastxl_iter_t* iter, size_t max_rows,
                                        fastxl_buffer_t* out_chunk, size_t* out_rows_read,
                                        fastxl_buffer_t* out_err) {
   zero_buffer(out_chunk);
-  release_buffer(out_err);
+  zero_buffer(out_err);
   if (out_rows_read != nullptr) *out_rows_read = 0;
   if (iter == nullptr) {
     return fail(out_err, status_for(ErrorCode::InvalidValue), "iter must not be NULL");
@@ -714,7 +782,6 @@ fastxl_status_t fastxl_iter_next_batch(fastxl_iter_t* iter, size_t max_rows,
     const size_t wanted = max_rows == 0 ? 4096 : max_rows;
     std::string chunk;
     size_t produced = 0;
-    Json record;
     while (produced < wanted) {
       if (!iter->reader->next(iter->row)) {
         iter->exhausted = true;
@@ -732,15 +799,22 @@ fastxl_status_t fastxl_iter_next_batch(fastxl_iter_t* iter, size_t max_rows,
         break;
       }
       if (iter->objects) {
-        record = Json::object();
-        for (size_t i = 0; i < iter->row.size() && i < iter->columns.size(); ++i)
-          record[iter->columns[i]] = cell_value(iter->row[i], iter->scratch);
+        chunk += '{';
+        for (size_t i = 0; i < iter->row.size() && i < iter->columns.size(); ++i) {
+          if (i != 0) chunk += ',';
+          append_json_string(chunk, iter->columns[i]);
+          chunk += ':';
+          append_json_cell(chunk, iter->row[i], iter->scratch);
+        }
+        chunk += '}';
       } else {
-        record = Json::array();
-        for (size_t i = 0; i < iter->row.size(); ++i)
-          record.push_back(cell_value(iter->row[i], iter->scratch));
+        chunk += '[';
+        for (size_t i = 0; i < iter->row.size(); ++i) {
+          if (i != 0) chunk += ',';
+          append_json_cell(chunk, iter->row[i], iter->scratch);
+        }
+        chunk += ']';
       }
-      chunk += record.dump();
       chunk += '\n';
       ++iter->emitted;
       ++produced;
@@ -844,7 +918,7 @@ fastxl_status_t fastxl_writer_open(const char* dst_utf8, const char* options_jso
                                    fastxl_writer_t** out_writer,
                                    fastxl_buffer_t* out_err) {
   if (out_writer != nullptr) *out_writer = nullptr;
-  release_buffer(out_err);
+  zero_buffer(out_err);
   return guarded(out_err, [&] {
     if (dst_utf8 == nullptr || *dst_utf8 == '\0')
       throw Exception(ErrorCode::InvalidValue, "dst_utf8 must not be empty");
@@ -888,7 +962,7 @@ fastxl_status_t fastxl_writer_open(const char* dst_utf8, const char* options_jso
 
 fastxl_status_t fastxl_writer_write_jsonl(fastxl_writer_t* writer, const char* jsonl_data,
                                           size_t jsonl_len, fastxl_buffer_t* out_err) {
-  release_buffer(out_err);
+  zero_buffer(out_err);
   if (writer == nullptr)
     return fail(out_err, status_for(ErrorCode::InvalidValue), "writer must not be NULL");
   return guarded(out_err, [&] {
@@ -948,7 +1022,7 @@ fastxl_status_t fastxl_writer_write_jsonl(fastxl_writer_t* writer, const char* j
 }
 
 fastxl_status_t fastxl_writer_finish(fastxl_writer_t* writer, fastxl_buffer_t* out_err) {
-  release_buffer(out_err);
+  zero_buffer(out_err);
   if (writer == nullptr)
     return fail(out_err, status_for(ErrorCode::InvalidValue), "writer must not be NULL");
   return guarded(out_err, [&] { writer->finish(); });

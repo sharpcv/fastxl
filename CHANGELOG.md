@@ -51,6 +51,38 @@ and only adds optional fields within a major version.
 - Version is `1.3.0` across `xmake.lua`, the CLI, the Python package, the skill
   mirror and the MCP server.
 
+### Fixed
+
+- C ABI entry points overwrite their output structs instead of freeing them
+  first, so passing uninitialised stack `fastxl_buffer_t` values no longer
+  calls `free()` on garbage. Reusing an output struct requires
+  `fastxl_buffer_free()` between calls (documented in `fastxl_c.h`).
+- `fastxl_iter_open()` hands over the iterator only after the meta buffer is
+  stored; an allocation or dump failure no longer leaks the reader and its file
+  descriptor.
+- `fastxl_ctypes.RowIterator`: JSONL chunks split on `\n` only, so cells
+  containing U+2028/U+2029 (legal unescaped JSON) no longer break decoding;
+  buffered rows use a `deque` (no O(n²) `list.pop(0)`); `closed` becomes true
+  when the stream is exhausted.
+- `fastxl_iter_next_batch()` writes JSONL rows directly instead of building a
+  per-row `nlohmann::ordered_json` tree: strings are validated once and escaped
+  in place, integers/booleans use `to_chars`, and doubles reuse nlohmann's
+  formatter. The bytes are unchanged (checked against the previous
+  implementation on every fixture in both `arrays` and `objects` shapes).
+- `fastxl_ctypes.Session` and `JsonlWriter` release their C handles from
+  `__del__` when not used as context managers, and probes on a closed
+  `Session` raise `ValueError` instead of silently dropping the cache.
+- `fastxl_cxx.hpp`: `RowIter::closed()` reports `close()` and exhaustion;
+  `JsonlWriter::write_jsonl()` short-circuits empty string views before the
+  `strlen()` fallback; `Result<T>` stores a `std::variant<T, Error>` instead of
+  two optionals; added the missing top-level `fastxl::cxx::convert()`.
+- `Session` previews use a separate `preview_capacity` (default 4) cache so
+  large preview payloads no longer evict schema/probe entries; cache keys sort
+  option keys and normalize the file path.
+- `xmake install fastxl-c` installs the Windows import library and only forces
+  the `MD` runtime in release builds (Debug stays `MDd`); Windows CI now
+  compiles, links and runs the C and C++ SDK tests and `package_sdk.py`.
+
 ## v1.2.1
 
 ### Added

@@ -129,6 +129,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: latest
@@ -174,4 +178,25 @@ jobs:
           python projects/tests/test_cli.py
           python projects/tests/test_python.py
           python projects/tests/test_mcp.py
-          python projects/tests/test_c_abi.py
+
+      - name: C ABI SDK checks
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build\c-abi-tmp | Out-Null
+          $env:PATH = (Resolve-Path build\lib).Path + ";" + $env:PATH
+          cl /nologo /W4 /std:c11 /Iprojects\fastxl-c\include `
+            projects\fastxl-c\tests\test_c_abi.c `
+            /Fe:build\test_c_abi.exe /link /LIBPATH:build\lib fastxl.lib
+          if ($LASTEXITCODE -ne 0) { throw "cl failed for the C ABI test" }
+          build\test_c_abi.exe projects\tests\fixtures\basic.xlsx build\c-abi-tmp
+          if ($LASTEXITCODE -ne 0) { throw "test_c_abi.exe failed" }
+          cl /nologo /W4 /std:c++20 /EHsc /Iprojects\fastxl-c\include `
+            projects\fastxl-c\tests\test_cxx_abi.cpp `
+            /Fe:build\test_cxx_abi.exe /link /LIBPATH:build\lib fastxl.lib
+          if ($LASTEXITCODE -ne 0) { throw "cl failed for the C++ ABI test" }
+          build\test_cxx_abi.exe projects\tests\fixtures\basic.xlsx
+          if ($LASTEXITCODE -ne 0) { throw "test_cxx_abi.exe failed" }
+          python projects\tests\test_c_abi.py
+          if ($LASTEXITCODE -ne 0) { throw "test_c_abi.py failed" }
+          python projects\tools\package_sdk.py
+          if ($LASTEXITCODE -ne 0) { throw "package_sdk.py failed" }

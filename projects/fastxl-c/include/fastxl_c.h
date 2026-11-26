@@ -47,6 +47,11 @@ typedef struct fastxl_buffer {
   size_t size; /* byte length, excluding the terminator */
 } fastxl_buffer_t;
 
+/* Output buffers: every entry point overwrites the structs it returns through
+ * and never inspects their previous contents, so passing an uninitialised
+ * stack struct is safe. Reusing a struct for a second call without calling
+ * fastxl_buffer_free() on its previous payload leaks that payload. */
+
 /* Version and memory management. */
 FASTXL_C_API uint32_t fastxl_abi_version(void);
 FASTXL_C_API const char* fastxl_version_string(void);
@@ -58,10 +63,11 @@ FASTXL_C_API void fastxl_buffer_free(fastxl_buffer_t* buf);
 /* Session: optional cache for repeated probes. Thread-safe; pass NULL to any
  * probe for a one-shot call without caching.
  *
- * options_json keys: capacity (default 8, info payloads), profile_capacity
- * (default 64, schema/probe payloads), search_capacity (default 16, search
- * payloads). Entries are keyed by the file's size and mtime, so a rewritten
- * workbook misses automatically.
+ * options_json keys: capacity (default 8, info payloads), preview_capacity
+ * (default 4, preview payloads), profile_capacity (default 64,
+ * schema/probe payloads), search_capacity (default 16, search payloads).
+ * Entries are keyed by the file's size and mtime, so a rewritten workbook
+ * misses automatically.
  */
 FASTXL_C_API fastxl_status_t fastxl_session_create(const char* options_json,
                                                    fastxl_session_t** out_session,

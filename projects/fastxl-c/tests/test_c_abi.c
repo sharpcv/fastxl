@@ -45,6 +45,22 @@ int main(int argc, char** argv) {
   fastxl_buffer_t out = {0};
   fastxl_buffer_t err = {0};
 
+  /* Out structs are overwritten, never freed: callers pass uninitialised
+   * stack structs, so the entry point must not free their garbage pointers. */
+  {
+    fastxl_buffer_t poisoned_out;
+    fastxl_buffer_t poisoned_err;
+    memset(&poisoned_out, 0xAB, sizeof(poisoned_out));
+    memset(&poisoned_err, 0xAB, sizeof(poisoned_err));
+    require(fastxl_info_json(NULL, fixture, NULL, &poisoned_out, &poisoned_err) == 0,
+            "uninitialised buffers info status");
+    require(poisoned_out.data != NULL && poisoned_out.size != 0,
+            "uninitialised buffers info payload");
+    require(poisoned_err.data == NULL && poisoned_err.size == 0,
+            "uninitialised error buffer is zeroed");
+    fastxl_buffer_free(&poisoned_out);
+  }
+
   /* info (one-shot, no session) */
   require(fastxl_info_json(NULL, fixture, NULL, &out, &err) == 0, "info status");
   require(out.data != NULL && strstr(out.data, "\"sheets\"") != NULL, "info payload");

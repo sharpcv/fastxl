@@ -130,6 +130,7 @@ def stream_checks(fastxl):
     rows = list(iterator)
     check(len(rows) == probe["rows_scanned"], "iter: row count")
     check(isinstance(rows[0], list), "iter: array rows")
+    check(iterator.closed, "iter: exhausted closes the reader")
     iterator.close()
     check(iterator.closed, "iter: close")
     iterator.close()
@@ -178,6 +179,14 @@ def writer_checks(fastxl, work_dir):
     except fastxl.Error as error:
         check(error.name == "EmptyTable", "writer: empty error name")
 
+    # U+2028/U+2029 are legal unescaped JSON string bytes: a JSONL line must
+    # not be split on them (str.splitlines() used to).
+    tricky = work_dir / "tricky.csv"
+    value = "a\u2028b\u2029c"
+    fastxl.write_rows(str(tricky), [{"text": value}], columns=["text"], format="csv")
+    records = list(fastxl.iter_rows(str(tricky), shape="objects", format="csv"))
+    check(records == [{"text": value}], "iter: unicode line separators")
+
 
 def convert_checks(fastxl, work_dir):
     basic = str(FIXTURES / "basic.xlsx")
@@ -223,6 +232,11 @@ def error_checks(fastxl):
         pass
     session.close()
     check(session.closed, "session: closed")
+    try:
+        session.info(str(FIXTURES / "basic.xlsx"))
+        check(False, "session: closed session raises")
+    except ValueError:
+        pass
 
 
 def session_checks(fastxl):

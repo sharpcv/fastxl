@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -35,28 +34,27 @@ private:
 template <class T>
 class Result {
 public:
-  Result(T value) : value_(std::move(value)) {}
-  Result(Error error) : error_(std::move(error)) {}
+  Result(T value) : value_(std::in_place_index<0>, std::move(value)) {}
+  Result(Error error) : value_(std::in_place_index<1>, std::move(error)) {}
 
-  bool ok() const noexcept { return value_.has_value(); }
+  bool ok() const noexcept { return value_.index() == 0; }
   explicit operator bool() const noexcept { return ok(); }
-  const Error& error() const& { return *error_; }
-  Error& error() & { return *error_; }
+  const Error& error() const& { return std::get<1>(value_); }
+  Error& error() & { return std::get<1>(value_); }
 
   T& value() & {
 #if defined(FASTXL_CXX_NO_EXCEPTIONS)
-    if (!value_) std::abort();
+    if (!ok()) std::abort();
 #else
-    if (!value_) throw *error_;
+    if (!ok()) throw std::get<1>(value_);
 #endif
-    return *value_;
+    return std::get<0>(value_);
   }
   const T& value() const& { return const_cast<Result*>(this)->value(); }
   T&& value() && { return std::move(value()); }
 
 private:
-  std::optional<T> value_;
-  std::optional<Error> error_;
+  std::variant<T, Error> value_;
 };
 
 class Buffer {
@@ -184,15 +182,18 @@ class RowIter {
 public:
   RowIter() = default;
   RowIter(RowIter&& other) noexcept
-      : iter_(other.iter_), meta_(std::move(other.meta_)) {
+      : iter_(other.iter_), meta_(std::move(other.meta_)), closed_(other.closed_) {
     other.iter_ = nullptr;
+    other.closed_ = true;
   }
   RowIter& operator=(RowIter&& other) noexcept {
     if (this != &other) {
       reset();
       iter_ = other.iter_;
       meta_ = std::move(other.meta_);
+      closed_ = other.closed_;
       other.iter_ = nullptr;
+      other.closed_ = true;
     }
     return *this;
   }
@@ -218,16 +219,18 @@ public:
 
   void close() noexcept {
     if (iter_ != nullptr) fastxl_iter_close(iter_);
+    closed_ = true;
   }
   void reset() noexcept {
     if (iter_ != nullptr) fastxl_iter_destroy(iter_);
     iter_ = nullptr;
+    closed_ = true;
   }
-  bool closed() const noexcept { return iter_ == nullptr; }
+  bool closed() const noexcept { return closed_; }
   std::string_view meta_json() const noexcept { return meta_.view(); }
 
   Result<RowBatch> next(size_t max_rows = 4096) {
-    if (iter_ == nullptr) return RowBatch{};
+    if (iter_ == nullptr || closed_) return RowBatch{};
     fastxl_buffer_t chunk{};
     fastxl_buffer_t error{};
     size_t rows = 0;
@@ -238,12 +241,16 @@ public:
     RowBatch batch;
     batch.jsonl = Buffer(chunk);
     batch.rows = rows;
+    // The library closes the reader when it reports an empty batch, so keep
+    // closed() truthful without destroying the handle (reset() still does).
+    if (rows == 0) closed_ = true;
     return batch;
   }
 
 private:
   fastxl_iter_t* iter_ = nullptr;
   Buffer meta_;
+  bool closed_ = false;
 };
 
 class JsonlWriter {
@@ -278,6 +285,10 @@ public:
   }
 
   Result<std::monostate> write_jsonl(std::string_view chunk) {
+    // jsonl_len == 0 makes the C ABI fall back to strlen(). An empty
+    // string_view may point into the middle of a non-terminated buffer, so
+    // never forward it.
+    if (chunk.empty()) return done();
     fastxl_buffer_t error{};
     const fastxl_status_t status =
         fastxl_writer_write_jsonl(writer_, chunk.data(), chunk.size(), &error);
@@ -320,6 +331,18 @@ inline Result<Buffer> probe(std::string_view file, std::string_view options = {}
 inline Result<Buffer> search(std::string_view file, std::string_view query,
                              std::string_view options = {}) {
   return Session().search(file, query, options);
+}
+inline Result<std::monostate> convert(std::string_view src, std::string_view dst,
+                                      std::string_view options = {}) {
+  fastxl_buffer_t error{};
+  const std::string source(src);
+  const std::string target(dst);
+  const std::string opts(options);
+  const fastxl_status_t status = fastxl_convert(
+      source.c_str(), target.c_str(), options.empty() ? nullptr : opts.c_str(), &error);
+  Buffer message(error);
+  if (status != 0) return Error(status, message.str());
+  return std::monostate{};
 }
 
 } // namespace fastxl::cxx

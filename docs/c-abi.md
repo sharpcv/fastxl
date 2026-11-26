@@ -43,6 +43,9 @@ Link with `-lfastxl` and put the library on the loader path (or `rpath`).
 auto session = fastxl::cxx::Session::create().value();
 auto schema = session.schema("book.xlsx", R"({"header_row":"auto"})").value();
 std::string_view json = schema.view();
+
+// One-shot helpers build a throwaway session; convert() needs none.
+fastxl::cxx::convert("book.xlsx", "book.csv", R"({"sheet":"Data"})").value();
 ```
 
 `Result<T>::value()` throws `fastxl::cxx::Error`; compile the host with
@@ -66,6 +69,14 @@ fastxl.convert("book.xlsx", "book.csv", sheet="Data")
 `Session`. Row streaming crosses the ABI once per batch (4096 rows by
 default), not once per cell.
 
+`Session` and `JsonlWriter` close their C handles from `__del__`, so a
+forgotten `close()` does not leak the session caches or the output file
+descriptor; use `with` (or `close()`) when the resource must be released
+deterministically. Calling a probe on a closed `Session` raises `ValueError`.
+`RowIterator.closed` is true after `close()` and after the stream is
+exhausted; array rows are Python `list`s, matching `fastxl.iter_rows` of the
+pybind11 module.
+
 ## Options
 
 All options are an optional UTF-8 JSON object; unknown keys are ignored. See
@@ -79,4 +90,6 @@ is `1 + fastxl::ErrorCode` and maps to a stable name via
 `fastxl_abi_version()` is `1`. Fields are added through options JSON, so a new
 library keeps serving old callers. Buffers are allocated by the library and
 must be released with `fastxl_buffer_free()` (or the RAII wrappers); never call
-`free()` on a returned pointer.
+`free()` on a returned pointer. Every entry point overwrites its output structs
+without freeing them first, so uninitialised stack structures are safe; free a
+previous payload before reusing the same struct for another call.
