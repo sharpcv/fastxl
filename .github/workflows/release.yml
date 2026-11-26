@@ -60,8 +60,15 @@ jobs:
 
       - name: Package
         run: |
+          # Shrink the shipped CLI/extension; ctypes hosts never load debug
+          # symbols and the release zip is downloaded by end users.
+          strip --strip-unneeded build/bin/fastxl-cli
+          strip --strip-unneeded build/python/fastxl/_fastxl.so
           python3 projects/tools/stage_skill.py
           python3 projects/tools/package_release.py
+          version=$(python3 -c "import sys; sys.path.insert(0, 'projects/tools'); import package_release; print(package_release.read_version())")
+          git archive --format=zip --prefix="fastxl-$version/" \
+            -o "build/fastxl-$version-src.zip" HEAD
 
       - uses: actions/upload-artifact@v4
         with:
@@ -95,7 +102,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: fastxl-sdk-linux-${{ matrix.arch }}
-          path: build/fastxl-sdk-*.zip
+          path: |
+            build/fastxl-sdk-*.zip
+            build/wheelhouse/*.whl
           if-no-files-found: error
 
   windows:
@@ -140,11 +149,14 @@ jobs:
           python projects/tools/stage_skill.py
           python projects/tools/package_release.py
           python projects/tools/package_sdk.py
+          python projects/tools/package_wheel.py --plat-name win_amd64 --out build/wheelhouse
 
       - uses: actions/upload-artifact@v4
         with:
           name: fastxl-windows-x64
-          path: build/fastxl-*.zip
+          path: |
+            build/fastxl-*.zip
+            build/wheelhouse/*.whl
           if-no-files-found: error
 
   publish:
@@ -160,7 +172,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum fastxl-*.zip > SHA256SUMS.txt
+          sha256sum fastxl-*.zip fastxl_ctypes-*.whl > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Upload to GitHub Release
@@ -168,5 +180,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # The publish job has no checkout, so point gh at the repository.
-          gh release upload "${{ inputs.tag }}" dist/*.zip dist/SHA256SUMS.txt \
+          gh release upload "${{ inputs.tag }}" dist/*.zip dist/*.whl dist/SHA256SUMS.txt \
             --clobber -R "${{ github.repository }}"

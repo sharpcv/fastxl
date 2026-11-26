@@ -54,11 +54,9 @@ bindings/python/fastxl/_fastxl.lib
 bindings/python/fastxl/_fastxl*.pyd
 bindings/python/fastxl/_fastxl*.so
 
-# Staged skill artifacts are produced by projects/tools/stage_skill.py
+# Staged skill artifacts are produced by projects/tools/stage_skill.py; the
+# Python package is synced from bindings/python/fastxl, never tracked twice.
 skill/bin/*
-skill/python/fastxl/_fastxl.*
-!skill/python/fastxl/__init__.py
+skill/python/fastxl/
 skill/reference/*
 !skill/reference/.gitkeep
-
-skill/python/fastxl/py.typed

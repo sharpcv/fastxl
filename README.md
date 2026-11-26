@@ -106,8 +106,12 @@ fastxl.convert("book.xlsx", "book.csv", sheet="Data")
 ```
 
 Build it with `xmake build -y fastxl-c`; the package is copied to
-`build/lib/fastxl_ctypes`. See [`docs/c-abi.md`](docs/c-abi.md) for the C and
-C++ surfaces.
+`build/lib/fastxl_ctypes`. Release assets also include version-independent
+wheels (`fastxl_ctypes-<ver>-py3-none-{manylinux_2_28_x86_64,
+manylinux_2_28_aarch64,win_amd64}.whl`) with the shared library bundled, so
+`pip install fastxl_ctypes-…whl` is enough — no `FASTXL_LIBRARY` setup and no
+per-interpreter build. See [`docs/c-abi.md`](docs/c-abi.md) for the C and C++
+surfaces.
 
 ## Errors and exit codes
 

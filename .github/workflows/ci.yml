@@ -84,6 +84,12 @@ jobs:
             grep -v '^fastxl_' | test ! -s /dev/stdin
           python3 projects/tests/test_c_abi.py
           python3 projects/tools/package_sdk.py
+          ROOT="$PWD"
+          python3 projects/tools/package_wheel.py --plat-name linux_x86_64 \
+            --out build/wheelhouse
+          python3 -m zipfile -e build/wheelhouse/fastxl_ctypes-*.whl build/wheel-test
+          test -f build/wheel-test/fastxl_ctypes/libfastxl.so
+          (cd /tmp && PYTHONPATH="$ROOT/build/wheel-test" python3 -c "import fastxl_ctypes; s = fastxl_ctypes.schema('$ROOT/projects/tests/fixtures/basic.xlsx'); assert s['ok'] is True, s; print('wheel ok:', fastxl_ctypes.version())")
 
   # Gate the released Linux SDK artifact: it must stay loadable on glibc 2.28
   # hosts, which only a manylinux_2_28 build can guarantee.
@@ -212,3 +218,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "test_c_abi.py failed" }
           python projects\tools\package_sdk.py
           if ($LASTEXITCODE -ne 0) { throw "package_sdk.py failed" }
+          python projects\tools\package_wheel.py --plat-name win_amd64 --out build\wheelhouse
+          if ($LASTEXITCODE -ne 0) { throw "package_wheel.py failed" }
+          $wheel = (Get-ChildItem build\wheelhouse\fastxl_ctypes-*.whl | Select-Object -First 1).FullName
+          python -m pip install --quiet --no-deps --target build\wheel-test $wheel
+          if ($LASTEXITCODE -ne 0) { throw "pip install of the wheel failed" }
+          Push-Location $env:TEMP
+          try {
+            $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\build\wheel-test"
+            python -c "import fastxl_ctypes, sys; s = fastxl_ctypes.schema(sys.argv[1]); assert s['ok'] is True, s; print('wheel ok:', fastxl_ctypes.version())" "$env:GITHUB_WORKSPACE\projects\tests\fixtures\basic.xlsx"
+            if ($LASTEXITCODE -ne 0) { throw "wheel import failed" }
+          } finally {
+            Pop-Location
+            Remove-Item Env:PYTHONPATH
+          }

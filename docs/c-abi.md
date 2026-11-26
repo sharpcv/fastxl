@@ -77,6 +77,26 @@ deterministically. Calling a probe on a closed `Session` raises `ValueError`.
 exhausted; array rows are Python `list`s, matching `fastxl.iter_rows` of the
 pybind11 module.
 
+### Wheel
+
+Release assets include one version-independent wheel per platform:
+
+```text
+fastxl_ctypes-<version>-py3-none-manylinux_2_28_x86_64.whl
+fastxl_ctypes-<version>-py3-none-manylinux_2_28_aarch64.whl
+fastxl_ctypes-<version>-py3-none-win_amd64.whl
+```
+
+Each wheel bundles `libfastxl.so` / `fastxl.dll` in the package directory, so
+`pip install ./fastxl_ctypes-…whl` works on CPython 3.8–3.15 (free-threaded
+included) and PyPy without `FASTXL_LIBRARY` or a compiler. `pip` selects the
+manylinux wheel only on glibc 2.28+ systems. Build them with
+`projects/tools/package_wheel.py`; the Linux wheels must be built inside
+`manylinux_2_28` (the release job does).
+
+On Windows the DLL uses the dynamic CRT (`MD`), so install the Microsoft Visual
+C++ 2015–2022 Redistributable (x64) once on the host.
+
 ## Options
 
 All options are an optional UTF-8 JSON object; unknown keys are ignored. See

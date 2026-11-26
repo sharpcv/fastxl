@@ -29,6 +29,8 @@ echo "python: $("$PYTHON" --version)"
 xmake f -y -m release
 xmake build -y fastxl-c
 
+# Strip before packaging: the .so is dlopen'ed by ctypes, not debugged.
+strip --strip-unneeded build/lib/libfastxl.so
 "$PYTHON" projects/tools/check_sdk_symbols.py build/lib/libfastxl.so --max-glibc 2.28
 
 "$PYTHON" projects/tests/fixtures/gen_fixtures.py --out projects/tests/fixtures
@@ -39,3 +41,20 @@ cc -std=c11 -Wall -Wextra -Iprojects/fastxl-c/include \
 build/test_c_abi projects/tests/fixtures/basic.xlsx build/c-abi-tmp
 
 "$PYTHON" projects/tools/package_sdk.py
+"$PYTHON" projects/tools/package_wheel.py --plat-name "$AUDITWHEEL_PLAT" --out build/wheelhouse
+
+# Prove the wheel is self-contained: install it away from the checkout and
+# import it only from the wheel target directory.
+FIXTURE="$PWD/projects/tests/fixtures/basic.xlsx"
+WHEEL_TEST=$(mktemp -d)
+"$PYTHON" -m pip install --quiet --no-deps --target "$WHEEL_TEST/pkg" build/wheelhouse/fastxl_ctypes-*.whl
+(
+  cd "$WHEEL_TEST"
+  PYTHONPATH="$WHEEL_TEST/pkg" "$PYTHON" -c "
+import fastxl_ctypes, sys
+schema = fastxl_ctypes.schema(sys.argv[1])
+assert schema['ok'] is True, schema
+print('wheel ok:', fastxl_ctypes.version(), fastxl_ctypes.__file__)
+" "$FIXTURE"
+)
+rm -rf "$WHEEL_TEST"

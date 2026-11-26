@@ -4,7 +4,9 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
-## v1.3.0
+## v1.3.1
+
+1.3.0 was never published; 1.3.1 is the first binary release of the C ABI SDK.
 
 ### Added
 
@@ -38,6 +40,14 @@ and only adds optional fields within a major version.
   `build/fastxl-sdk-<version>-<platform>.zip` (headers, library, ctypes package,
   `docs/c-abi.md`, `LICENSE`, `THIRD_PARTY_NOTICES.txt`); the release workflow
   attaches it beside the existing release zip.
+- `projects/tools/package_wheel.py` emits version-independent
+  `fastxl_ctypes-<version>-py3-none-<plat>.whl` wheels
+  (`manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`, `win_amd64`) with the
+  shared library bundled, so `pip install` needs no `FASTXL_LIBRARY` and no
+  per-interpreter build. The manylinux job installs the wheel it built and
+  imports it away from the checkout before publishing.
+- Release assets also carry `fastxl-<version>-src.zip` (`git archive` of the
+  tag) and checksums for every zip and wheel.
 - `projects/bench/compare_paths.py` compares the C++ core, the C ABI, pybind11
   and ctypes through `fastxl-bench-paths-native` / `fastxl-bench-paths-abi`;
   the results are in [`docs/performance-1.3.0.md`](docs/performance-1.3.0.md)
@@ -54,7 +64,11 @@ and only adds optional fields within a major version.
   with `projects/tools/check_sdk_symbols.py`; CI runs the same job.
 - Linux package builds of minizip-ng and zlib-ng enable
   `CMAKE_POSITION_INDEPENDENT_CODE` so they can be linked into the shared SDK.
-- Version is `1.3.0` across `xmake.lua`, the CLI, the Python package, the skill
+- The skill package no longer tracks a second copy of the Python bindings:
+  `stage_skill.py` syncs `bindings/python/fastxl/` into
+  `skill/python/fastxl/` at packaging time, and the staged directory is
+  gitignored. Linux release binaries are `strip`ped before packaging.
+- Version is `1.3.1` across `xmake.lua`, the CLI, the Python package, the skill
   mirror and the MCP server.
 
 ### Fixed
