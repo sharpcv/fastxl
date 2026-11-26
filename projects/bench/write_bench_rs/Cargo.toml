@@ -1,0 +1,17 @@
+[package]
+name = "write_bench_rs"
+version = "0.1.0"
+edition = "2021"
+description = "rust_xlsxwriter write benchmark for fastxl's projects/bench comparison"
+publish = false
+
+[dependencies]
+rust_xlsxwriter = "0.104"
+
+[[bin]]
+name = "write_bench_rs"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1

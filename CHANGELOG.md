@@ -59,9 +59,11 @@ and only adds optional fields within a major version.
 - GitHub Actions on Linux x64, Linux arm64 and Windows x64, including a
   sanitizer job (ASan + UBSan and TSan over the C++ suite) and a
   `-fno-exceptions` compile gate for the public headers.
-- `projects/bench/compare_baselines.py`: fastxl vs `openpyxl` (and
-  `python-calamine` when installed) wall time, throughput and peak RSS, with the
-  measured numbers recorded in `README.md`.
+- `projects/bench/compare_baselines.py` (read: fastxl vs `openpyxl` and
+  `python-calamine`) and `projects/bench/compare_write.py` (+ the
+  `projects/bench/write_bench_rs` helper) (write: fastxl vs `rust_xlsxwriter`,
+  `xlsxwriter` and `openpyxl`): wall time, throughput, output size and peak RSS,
+  with the measured numbers recorded in `README.md`.
 - `docs/probe.schema.json` now describes `Budget` and `Search` and is validated
   by the test suites with `jsonschema`.
 

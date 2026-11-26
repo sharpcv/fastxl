@@ -29,6 +29,13 @@ projects/bench/*
 !projects/bench/*.hpp
 !projects/bench/xmake.lua
 !projects/bench/*.md
+!projects/bench/write_bench_rs/
+projects/bench/write_bench_rs/*
+!projects/bench/write_bench_rs/Cargo.toml
+!projects/bench/write_bench_rs/Cargo.lock
+!projects/bench/write_bench_rs/src/
+projects/bench/write_bench_rs/src/*
+!projects/bench/write_bench_rs/src/*.rs
 !projects/bench/data/
 projects/bench/data/*
 !projects/bench/data/*.py

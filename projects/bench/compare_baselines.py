@@ -58,6 +58,14 @@ try:
         workbook = python_calamine.CalamineWorkbook.from_path(path)
         rows = len(workbook.get_sheet_by_index(0).to_python())
         result["rows"] = max(0, rows - 1)
+    elif op == "calamine_rows":
+        import python_calamine
+        workbook = python_calamine.CalamineWorkbook.from_path(path)
+        sheet = workbook.get_sheet_by_index(0)
+        rows = 0
+        for _ in sheet.iter_rows():
+            rows += 1
+        result["rows"] = max(0, rows - 1)
     else:
         raise SystemExit("unknown op: " + op)
 except ImportError as error:
@@ -73,6 +81,7 @@ OPS = [
     ("fastxl probe", "fastxl_probe"),
     ("fastxl read all", "fastxl_rows"),
     ("openpyxl read_only", "openpyxl"),
+    ("calamine iter_rows", "calamine_rows"),
     ("calamine to_python", "calamine"),
 ]
 

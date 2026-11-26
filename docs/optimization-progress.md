@@ -292,13 +292,23 @@
 
 **基准与文档**
 
-- 新增 `projects/bench/compare_baselines.py`：同一 fixture 分别用子进程跑 fastxl
-  native、`openpyxl`（可选 `python-calamine`），报告 wall time、rows/s 与峰值 RSS。
-- README 新增 Performance 章节：probe 层延迟（CLI/native/Session）、跨库解析对比
-  （15k×10 与 200k×8）、峰值内存与复现命令。
-- 本机（Linux x86_64）实测：200k×8 上 `probe` 0.57 s / 352k rows/s、
-  `read_rows(0)` 1.27 s / 158k rows/s，openpyxl `read_only` 10.15 s / 20k rows/s
-  （`python-calamine` 在本机不可用，README 已注明）。
+- 新增 `projects/bench/compare_baselines.py`（读：fastxl / `openpyxl` /
+  `python-calamine`）与 `projects/bench/compare_write.py` + `write_bench_rs`（写：
+  fastxl / `rust_xlsxwriter` / `xlsxwriter` / `openpyxl`），全部子进程隔离测量
+  wall time、rows/s、输出大小与峰值 RSS。
+- README 新增 Performance 章节：probe 层延迟（CLI/native/Session）、读对比、写对比
+  与复现命令。
+- 本机（Linux x86_64，Python 3.14，calamine 0.9.1，rust_xlsxwriter 0.104）实测：
+
+  | 场景 | fastxl | 基线 |
+  |---|---|---|
+  | 读 200k×8（流式扫描） | 0.57 s / 352k rows/s / 133 MB | calamine 1.41 s、openpyxl 10.13 s |
+  | 读 200k×8（物化全部行） | 1.26 s / 159k rows/s / 257 MB | calamine `to_python` 1.48 s / 147 MB |
+  | 写 200k×8 | 1.81 s / 111k rows/s / 113 MB | rust_xlsxwriter 1.95 s / 270 MB、xlsxwriter 10.18 s、openpyxl 17.32 s |
+  | 写 15k×10 | 0.16 s / 92k rows/s / 28 MB | rust_xlsxwriter 0.17 s / 26 MB、openpyxl 1.55 s |
+
+  fastxl 的写数字包含默认的原子写 + fsync；物化全部行时内存高于 calamine（Python
+  dict vs list），README 已注明适用场景。
 
 ---
 
@@ -451,8 +461,8 @@ v1.1.0 的 P0/P1 门禁已全部落地。后续版本候选：
   `-fno-exceptions` 下构建整库。
 - **arm64 NEON 实测**：CI 的 linux-arm64 job 已能构建并跑通测试，但还没有 NEON 与
   scalar 的逐单元格等价性对比与性能数据。
-- **更多基线**：`python-calamine`（本机不可用）、LibreOffice headless 重算、
-  `openpyxl` round-trip 的自动化对照。
+- **更多基线**：LibreOffice headless 重算、`openpyxl` round-trip 的自动化对照，
+  以及把 `compare_write.py` 的写入基准纳入 CI 回归门限。
 - **未覆盖的格式细节**：`indexed` 调色板、数组公式（`t="array"`）展开、
   Windows 上 `Session(memory_map=True)` 的实测行为。
 - **Windows Python 模块的长期验证**：CI 已覆盖，但 Windows 上的 `mmap`/文件锁行为
