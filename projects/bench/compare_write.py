@@ -29,7 +29,6 @@ TMP_DIR = ROOT / "build" / "bench-write"
 #   then row * column for the remaining columns.
 CHILD = r"""
 import json
-import resource
 import sys
 import time
 from pathlib import Path
@@ -105,7 +104,13 @@ except Exception as error:  # pragma: no cover - reported, not swallowed
 
 output = Path(out)
 result["bytes"] = output.stat().st_size if output.exists() else 0
-result["peak_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+try:
+    # Cross-platform child high-water RSS; Windows has no resource module.
+    sys.path.insert(0, str(root / "projects" / "bench"))
+    from common import peak_rss_bytes
+    result["peak_mb"] = peak_rss_bytes() / (1024.0 * 1024.0)
+except Exception:
+    result["peak_mb"] = None
 print(json.dumps(result))
 """
 
@@ -186,15 +191,17 @@ def report(rows, cols, runs):
         seconds = result["seconds"]
         rows_per_second = rows / seconds if seconds > 0 else 0.0
         cells_per_second = rows * cols / seconds if seconds > 0 else 0.0
-        print("%-20s %10.3f %12.0f %12.0f %10.1f %10d" % (
-            label, seconds, rows_per_second, cells_per_second, result["peak_mb"],
+        peak = "-" if result["peak_mb"] is None else "%.1f" % result["peak_mb"]
+        print("%-20s %10.3f %12.0f %12.0f %10s %10d" % (
+            label, seconds, rows_per_second, cells_per_second, peak,
             result["bytes"]))
         measurements.append({
             "writer": label,
             "seconds": round(seconds, 3),
             "rows_per_s": round(rows_per_second, 0),
             "cells_per_s": round(cells_per_second, 0),
-            "peak_mb": round(result["peak_mb"], 1),
+            "peak_mb": None if result["peak_mb"] is None
+            else round(result["peak_mb"], 1),
             "bytes": result["bytes"],
         })
     return measurements

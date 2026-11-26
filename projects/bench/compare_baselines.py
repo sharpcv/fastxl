@@ -25,13 +25,23 @@ FIXTURES = ROOT / "projects" / "tests" / "fixtures"
 
 CHILD = r"""
 import json
-import resource
 import sys
 import time
 from pathlib import Path
 
 root, op, path = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 sys.path.insert(0, str(root))
+
+
+def peak_mb():
+    # Cross-platform child high-water RSS; None when the platform has no API.
+    try:
+        sys.path.insert(0, str(root / "projects" / "bench"))
+        from common import peak_rss_bytes
+        return peak_rss_bytes() / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
 
 result = {"seconds": None, "rows": 0, "peak_mb": None, "error": None}
 started = time.perf_counter()
@@ -73,7 +83,7 @@ except ImportError as error:
 except Exception as error:  # pragma: no cover - reported, not swallowed
     result["error"] = "failed:" + str(error)
 result["seconds"] = time.perf_counter() - started
-result["peak_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+result["peak_mb"] = peak_mb()
 print(json.dumps(result))
 """
 
@@ -137,10 +147,13 @@ def report(fixture, runs):
         seconds = result["seconds"]
         rows_read = result["rows"] or 0
         throughput = rows_read / seconds if seconds > 0 else 0
-        print("%-22s %9.3f %9d %12.0f %10.1f" % (
-            label, seconds, rows_read, throughput, result["peak_mb"]))
+        peak = "-" if result["peak_mb"] is None else "%.1f" % result["peak_mb"]
+        print("%-22s %9.3f %9d %12.0f %10s" % (
+            label, seconds, rows_read, throughput, peak))
         rows.append({"operation": label, "seconds": round(seconds, 3), "rows": rows_read,
-                     "rows_per_s": round(throughput, 0), "peak_mb": round(result["peak_mb"], 1)})
+                     "rows_per_s": round(throughput, 0),
+                     "peak_mb": None if result["peak_mb"] is None
+                     else round(result["peak_mb"], 1)})
     return rows
 
 

@@ -17,12 +17,12 @@ Usage:
 
 Only the standard library is used. Peak RSS is the process high-water mark of
 the benchmarked children (Linux/macOS: ``getrusage``), so it is an upper bound
-rather than a per-call number.
+rather than a per-call number; Windows has no ``getrusage(2)`` for children, so
+CLI rows report ``-`` there instead of failing.
 """
 
 import argparse
 import json
-import resource
 import statistics
 import subprocess
 import sys
@@ -33,6 +33,16 @@ from typing import Any, Callable
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FIXTURES = ROOT / "projects" / "tests" / "fixtures"
+
+# Reuse the cross-platform high-water RSS helper instead of importing the
+# Unix-only ``resource`` module at top level.
+sys.path.insert(0, str(HERE))
+from common import peak_rss_bytes  # noqa: E402
+
+try:  # getrusage is Unix-only; peak_child_mb() degrades to None on Windows.
+    import resource
+except ImportError:  # pragma: no cover - Windows
+    resource = None
 
 
 def find_cli(explicit: str | None) -> Path:
@@ -70,19 +80,30 @@ def load_native() -> Any | None:
         return None
 
 
-def peak_child_mb() -> float:
-    """High-water RSS of reaped children in MiB (Linux/macOS report KiB)."""
+def child_peak_mb() -> float | None:
+    """High-water RSS of reaped children in MiB, or None when unavailable."""
+    if resource is None or not hasattr(resource, "RUSAGE_CHILDREN"):
+        return None
     raw = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    if sys.platform == "win32":
-        return raw / (1024.0 * 1024.0)
     return raw / 1024.0
 
 
-def peak_self_mb() -> float:
-    raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if sys.platform == "win32":
-        return raw / (1024.0 * 1024.0)
-    return raw / 1024.0
+def self_peak_mb() -> float | None:
+    """Process high-water RSS in MiB (cross-platform, None if unsupported)."""
+    try:
+        return peak_rss_bytes() / (1024.0 * 1024.0)
+    except Exception:  # pragma: no cover - defensive: RSS reporting is optional
+        return None
+
+
+def round_peak(value: float | None) -> float | None:
+    return None if value is None else round(value, 1)
+
+
+def max_child_peak(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    return round(max(after, before), 1)
 
 
 def measure(func: Callable[[], None], runs: int) -> dict[str, float]:
@@ -136,10 +157,10 @@ def suite(cli: Path, fixture: Path, native: Any | None, runs: int,
          "cli+budget"),
     ]
     for name, args, mode in cli_cases:
-        before = peak_child_mb()
+        before = child_peak_mb()
         stats = measure(cli_runner(cli, args), runs)
-        after = peak_child_mb()
-        stats.update(name=name, mode=mode, peak_mb=round(max(after, before), 1))
+        after = child_peak_mb()
+        stats.update(name=name, mode=mode, peak_mb=max_child_peak(before, after))
         rows.append(stats)
 
     if native is None:
@@ -158,9 +179,8 @@ def suite(cli: Path, fixture: Path, native: Any | None, runs: int,
         ("probe +budget", lambda: native.probe(target, max_bytes=max_bytes)),
     ]
     for name, call in native_cases:
-        before = peak_self_mb()
         stats = measure(call, runs)
-        stats.update(name=name, mode="native", peak_mb=round(peak_self_mb(), 1))
+        stats.update(name=name, mode="native", peak_mb=round_peak(self_peak_mb()))
         rows.append(stats)
 
     session = native.Session()
@@ -172,7 +192,7 @@ def suite(cli: Path, fixture: Path, native: Any | None, runs: int,
     ]
     for name, call in session_cases:
         stats = measure(call, runs)
-        stats.update(name=name, mode="session", peak_mb=round(peak_self_mb(), 1))
+        stats.update(name=name, mode="session", peak_mb=round_peak(self_peak_mb()))
         rows.append(stats)
     rows.append({"name": "session", "mode": "session", "stats": session.stats()})
     return rows
@@ -186,9 +206,9 @@ def print_table(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         if "median_ms" not in row:
             continue
-        print("%-30s %-11s %9.2f %9.2f %9.2f %9.1f" % (
-            row["name"], row["mode"], row["median_ms"], row["min_ms"], row["max_ms"],
-            row["peak_mb"]))
+        peak = "-" if row["peak_mb"] is None else "%.1f" % row["peak_mb"]
+        print("%-30s %-11s %9.2f %9.2f %9.2f %9s" % (
+            row["name"], row["mode"], row["median_ms"], row["min_ms"], row["max_ms"], peak))
     for row in rows:
         if row.get("name") == "session":
             print("\nsession cache: %s" % row["stats"])
