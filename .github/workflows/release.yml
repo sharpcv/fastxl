@@ -1,0 +1,135 @@
+name: release
+
+# Builds the prebuilt release packages for an existing tag and attaches them to
+# that tag's GitHub Release. Run it after a release has been created:
+#
+#   gh workflow run release.yml -f tag=v1.1.0
+#
+# Every job checks out the requested tag, so the packages always match the
+# tagged source even though this workflow file lives on the default branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to package and attach to its GitHub Release"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  XMAKE_ROOT: "y"
+
+jobs:
+  linux:
+    name: linux-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.xmake/packages
+          key: xmake-release-${{ matrix.arch }}-${{ hashFiles('xmake.lua', 'projects/*/xmake.lua', 'bindings/xmake.lua') }}
+          restore-keys: xmake-release-${{ matrix.arch }}-
+
+      - name: Install Python build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-dev pybind11-dev
+
+      - name: Build CLI and Python module
+        run: |
+          xmake f -y -m release
+          xmake build -y fastxl-cli fastxl-python
+
+      - name: Package
+        run: |
+          python3 projects/tools/stage_skill.py
+          python3 projects/tools/package_release.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastxl-linux-${{ matrix.arch }}
+          path: build/fastxl-*.zip
+          if-no-files-found: error
+
+  windows:
+    name: windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~\.xmake\packages
+          key: xmake-release-windows-${{ hashFiles('xmake.lua', 'projects/*/xmake.lua', 'bindings/xmake.lua') }}
+          restore-keys: xmake-release-windows-
+
+      - name: Install Python module dependencies
+        run: python -m pip install pybind11
+
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          $include = python -c "import sysconfig; print(sysconfig.get_paths()['include'])"
+          $prefix = python -c "import sys; print(sys.base_prefix)"
+          $pybind = python -c "import pybind11; print(pybind11.get_include())"
+          $version = python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"
+          "FASTXL_PY_INCLUDE=$include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PY_LIBDIR=$prefix\libs" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PY_LIBRARY=python$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "FASTXL_PYBIND11_INCLUDE=$pybind" | Out-File -FilePath $env:GITHUB_ENV -Append
+          xmake f -y -m release -p windows -a x64
+          xmake build -y fastxl-cli fastxl-python
+          python projects/tools/stage_skill.py
+          python projects/tools/package_release.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastxl-windows-x64
+          path: build/fastxl-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: publish-assets
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum fastxl-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.tag }}" dist/*.zip dist/SHA256SUMS.txt --clobber
