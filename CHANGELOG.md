@@ -4,6 +4,38 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
+## Unreleased (v1.3.0)
+
+### Added
+
+- `fastxl.RowIterator` now has `close()` and context-manager support
+  (`with fastxl.iter_rows(...) as rows:`), plus a `closed` property. The reader
+  and its file handle are released deterministically when a loop breaks early
+  instead of waiting for garbage collection — on Windows, keeping the mapping
+  open blocks replacing/deleting the source workbook. Iterating a closed
+  iterator stops, `close()` is idempotent, and `columns`/`header_row`/`sheet`
+  stay readable after close.
+
+### Changed
+
+- The Python bindings release the GIL around the expensive C++ work:
+  `info`, `schema`, `probe`, `search` and `preview_sheet` parse/profile with the
+  GIL released, `iter_rows()`/`read_rows()` release it per row decode, and
+  opening a workbook in a `Session` happens outside the lock. Concurrent Python
+  threads therefore make progress in parallel wherever the underlying fastxl
+  code is independent (measured on Windows x64: 16 `probe` calls on a 4-thread
+  pool take 0.30 s instead of 1.15 s serially, 3.78×).
+- `fastxl.Session` is thread-safe: the workbook, profile and search caches are
+  guarded by a mutex, cached values are copied out under the lock, and the
+  expensive open/profile/search phases run without holding the mutex. A single
+  `Session` can be shared by a thread pool (or a web framework's worker
+  threads); concurrent calls return identical results.
+
+### Changed — repository
+
+- `plugins/` (local DSH plugin experiments, including bundled executables) is
+  now gitignored so `git add .` cannot pick up local binaries.
+
 ## v1.2.0
 
 ### Added

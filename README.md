@@ -70,11 +70,14 @@ fastxl.search("book.xlsx", "invoice", context=2)
 rows = fastxl.preview("book.xlsx", sheet="Data", rows=20, with_cells=True)
 fastxl.write_xlsx("result.xlsx", rows["rows"], sheet_name="Result")
 
-# stream a large sheet without materializing it (tuple rows for positional access)
-for row in fastxl.iter_rows("book.xlsx", sheet="Data", as_tuples=True):
-    ...
+# stream a large sheet without materializing it; `with` closes the file handle
+# deterministically (tuple rows for positional access, `rows.close()` also works)
+with fastxl.iter_rows("book.xlsx", sheet="Data", as_tuples=True) as rows:
+    for row in rows:
+        ...
 
-# keep the workbook, profiles and searches warm; invalidates on (mtime, size)
+# keep the workbook, profiles and searches warm; invalidates on (mtime, size);
+# one Session can be shared by several threads (the heavy calls release the GIL)
 with fastxl.Session() as session:
     session.schema("book.xlsx", sheet="Data", max_bytes=4000)  # scans once
     session.search("book.xlsx", "invoice", max_hits=20)        # cached payload

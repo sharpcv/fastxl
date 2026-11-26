@@ -1,6 +1,6 @@
 # fastxl 优化记录与进度
 
-> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`
+> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`（`v1.3.0` 开发中）
 > 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试
 > 本机验证平台：Windows 10 x64（i7-14700 / MSVC 19.51）、Linux x86_64；CI 覆盖 Linux x64/arm64 与 Windows x64
 
@@ -34,6 +34,7 @@
 | M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
 | R1.1 | v1.1.0 发版收口：仓库清理、版本号、契约校验、Sanitizer/no-exceptions 门禁、基准 | ✅ 完成 |
 | M9 | v1.2.0 优化：Python 位置/惰性行流式、`Session` 画像与检索缓存、多 Sheet/大 part 纯 C++ 基准 | ✅ 完成并验证（Windows x64 本机实测；已发布 v1.2.0） |
+| M9.1 | v1.3.0：迭代器 `close()`/`with`、Python 绑定释放 GIL、`Session` 线程安全 | ✅ 完成并验证（Windows x64 本机实测） |
 
 ---
 
@@ -388,6 +389,22 @@ python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
 - 新增 `.github/workflows/release.yml`：按 tag 构建 Linux x64 / Linux arm64 /
   Windows x64 预编译包，生成 `SHA256SUMS.txt` 并上传到对应 Release；v1.2.0 的产物
   由该工作流生成并校验。
+
+### M9.1 — v1.3.0：迭代器确定性释放与 Python 线程安全
+
+- `fastxl.RowIterator` 新增 `close()`、`closed` 属性与上下文管理器
+  （`with fastxl.iter_rows(...) as rows:`）。`close()` 幂等，关闭后继续迭代抛
+  `StopIteration`，`columns`/`header_row`/`sheet` 仍可读；提前 `break` 时不再等 GC
+  才关闭文件句柄，解决 Windows 上句柄滞留导致无法替换/删除源文件的问题。
+- Python 绑定在耗时 C++ 阶段释放 GIL：`info`/`schema`/`probe`/`search`/
+  `preview_sheet` 在解析/画像时释放，`read_rows`/`iter_rows` 逐行解码时释放，
+  `Session` 打开工作簿时在锁外释放；`Session` 的三层缓存加 `std::mutex`，缓存值在
+  锁内拷贝返回，打开/画像/检索在锁外执行，因此单个 `Session` 可被线程池或 Web
+  worker 线程并发共享（24 次并发混合调用结果一致、无死锁）。Windows x64 实测：
+  16 次 `probe(large.xlsx, jobs=1)` 单线程 1.15 s，4 线程池 0.30 s（**3.78×**）。
+- 验证：`test_python.py` 新增 `close()`/`with`/`closed`、确定性句柄释放
+  （关闭后 `os.replace` 源文件成功）、并发 `Session` 与并发迭代器用例；
+  C++（123 tests）/CLI/Python/MCP 套件全部通过。
 
 ---
 

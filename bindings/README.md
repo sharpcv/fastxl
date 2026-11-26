@@ -77,24 +77,32 @@ header-derived column set are counted in `extra_cells`.
 Rows are dicts by default; `read_rows(..., as_tuples=True)` instead returns each
 row as a tuple of typed cell values in column order (it takes precedence over
 `as_dicts=True`, and existing calls are unchanged). For a large sheet, stream
-the rows instead of materializing them: `iter_rows(...)` returns a lazy
-iterator over the same typed rows, with no `max_bytes` budget:
+the rows instead of materializing them: `iter_rows(...)` returns a lazy iterator
+over the same typed rows, with no `max_bytes` budget. Use it as a context
+manager (or call `close()`) so the reader and its file handle are released
+deterministically, which matters on Windows when a loop breaks early:
 
 ```python
-it = fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
-                      as_tuples=True)
-it.columns        # column names from the resolved header row
-it.sheet, it.header_row
-for row in it:    # one tuple per row, read on demand
-    ...
-it.rows_read      # rows yielded so far
-it.truncated      # true if limit stopped the iteration early
+with fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
+                      as_tuples=True) as rows:
+    rows.columns        # column names from the resolved header row
+    rows.sheet, rows.header_row
+    for row in rows:    # one tuple per row, read on demand
+        ...
+    rows.rows_read      # rows yielded so far
+    rows.truncated      # true if limit stopped the iteration early
+# rows.closed is now True; iterating it further stops (StopIteration)
+
+it = fastxl.iter_rows("book.xlsx", limit=10)
+next(it); it.close()    # explicit, idempotent release
+it.columns              # metadata stays readable after close
 ```
 
 `iter_rows` takes the row-reader options (`limit`, `offset`, `infer`,
 `delimiter`, `fill_gaps`, `max_columns`, `with_cells`, `as_dicts`,
-`as_tuples`). `Session.iter_rows` has the same signature but opens the file for
-the iteration instead of reusing the cached workbook.
+`as_tuples`); exhausting the iterator or dropping it also closes the reader.
+`Session.iter_rows` has the same signature but opens the file for the iteration
+instead of reusing the cached workbook.
 
 `preview_sheet(file, sheet=None, header_row=1, rows=20, range="", columns="",
 max_cell_bytes=256, max_bytes=0)` returns the CLI `preview` contract for one xlsx
@@ -139,6 +147,14 @@ with fastxl.Session(capacity=8, profile_capacity=64,
 On Windows the session opens workbooks without `mmap` by default, so Excel can
 still overwrite the file while it is cached; `Session(memory_map=True)` opts in.
 `fastxl.Error` carries `.code` and the documented `.exit_code` (2/3/4).
+
+A `Session` is safe to share between Python threads and the expensive calls
+release the GIL: `info`/`schema`/`probe`/`search`/`preview_sheet` parse and
+profile without it, `iter_rows`/`read_rows` release it around each row decode,
+and the cache layers are mutex-protected (cached values are copied out under the
+lock, and the costly open/profile/search phases run without holding it). A
+single `Session` can therefore serve a thread pool or a web framework's worker
+threads. A single `RowIterator` should still be consumed by one thread at a time.
 
 The package is PEP 561 typed: `_fastxl.pyi` describes every function and result
 shape, and `py.typed` marks the distribution. Run `pyright` at the repository

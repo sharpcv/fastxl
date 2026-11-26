@@ -179,15 +179,22 @@ tuples of cell values in column order, and `as_tuples` wins over `as_dicts`.
 For sheets too large to materialize, `fastxl.iter_rows(...)` yields one row at a
 time instead of building the whole result; it has no `max_bytes` budget and
 exposes `columns`, `header_row`, `sheet`, `rows_read` and `truncated` (set when
-`limit` stops the iteration early):
+`limit` stops the iteration early). Use it as a context manager (or call
+`rows.close()`) so an early `break` releases the file handle instead of waiting
+for GC — on Windows an open handle blocks replacing the workbook:
 
 ```python
-it = fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
-                      as_tuples=True)
-for row in it:          # dicts by default, tuples with as_tuples=True
-    process(row)
-print(it.rows_read, it.columns)
+with fastxl.iter_rows("book.xlsx", sheet="Data", header_row="auto",
+                      as_tuples=True) as rows:
+    for row in rows:    # dicts by default, tuples with as_tuples=True
+        process(row)
+        break
+print(rows.rows_read, rows.columns)   # metadata stays readable after close
 ```
+
+`fastxl.Session` caches workbooks/profiles/searches and is safe to share between
+threads; the heavy calls release the GIL, so a thread pool or web worker threads
+can call one session concurrently.
 
 ## Writing and converting
 

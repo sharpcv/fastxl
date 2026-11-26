@@ -2,8 +2,9 @@
 """Native Python binding checks for fastxl.
 
 Covers the module functions, the ``max_bytes`` budget object, positional/lazy row
-streaming (``as_tuples`` / ``iter_rows``), the ``fastxl.Session`` workbook,
-profile and search caches, and parity with the CLI JSON contract.
+streaming (``as_tuples`` / ``iter_rows`` including ``close()`` and the context
+manager), the ``fastxl.Session`` workbook/profile/search caches, concurrent use
+across threads, and parity with the CLI JSON contract.
 
 Usage:
     python projects/tests/test_python.py
@@ -227,6 +228,89 @@ def streaming_checks(fastxl):
     partial = fastxl.iter_rows(basic)
     next(partial)
     check(partial.rows_read == 1, "iter_rows: incremental next")
+    check(partial.closed is False, "iter_rows: open until closed")
+    partial.close()
+    check(partial.closed is True, "iter_rows: close")
+    partial.close()
+    check(partial.closed is True, "iter_rows: close is idempotent")
+    try:
+        next(partial)
+    except StopIteration:
+        pass
+    else:
+        check(False, "iter_rows: next after close raises StopIteration")
+    check(partial.columns == dicts["columns"] and partial.sheet == dicts["sheet"],
+          "iter_rows: metadata survives close")
+
+    with fastxl.iter_rows(basic, limit=2) as managed:
+        check(managed.closed is False, "iter_rows: with enters")
+        check(len(list(managed)) == 2, "iter_rows: with iterates")
+    check(managed.closed is True, "iter_rows: with closes")
+
+
+def iterator_release_check(fastxl, work_dir):
+    """close()/with release the file handle so the source can be replaced."""
+    source = FIXTURES / "basic.xlsx"
+    copy_path = work_dir / "iterator-release.xlsx"
+    renamed = work_dir / "iterator-release-renamed.xlsx"
+    shutil.copy(source, copy_path)
+
+    rows = fastxl.iter_rows(str(copy_path))
+    next(rows)
+    rows.close()
+    try:
+        os.replace(copy_path, renamed)
+    except OSError as error:
+        check(False, "iter_rows: close releases the file handle (%s)" % error)
+    else:
+        check(renamed.exists(), "iter_rows: close releases the file handle")
+
+    # Exiting the context manager releases even when the loop broke early.
+    loop_path = work_dir / "iterator-loop.xlsx"
+    loop_renamed = work_dir / "iterator-loop-renamed.xlsx"
+    shutil.copy(source, loop_path)
+    with fastxl.iter_rows(str(loop_path)) as iterator:
+        for _ in iterator:
+            break
+    try:
+        os.replace(loop_path, loop_renamed)
+    except OSError as error:
+        check(False, "iter_rows: with releases the file handle (%s)" % error)
+    else:
+        check(loop_renamed.exists(), "iter_rows: with releases the file handle")
+
+
+def thread_safety_checks(fastxl):
+    """Heavy calls release the GIL and Session caches stay consistent."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    basic = str(FIXTURES / "basic.xlsx")
+    session = fastxl.Session()
+
+    def mixed_call(index):
+        return (
+            session.schema(basic)["ok"],
+            session.probe(basic)["ok"],
+            session.search(basic, "a", max_hits=3)["ok"],
+            fastxl.info(basic)["ok"],
+            tuple(column["header"] for column in session.probe(basic)["columns"]),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(mixed_call, range(24)))
+    check(len(results) == 24, "threads: every concurrent call returned")
+    check(all(result == results[0] for result in results), "threads: consistent results")
+    stats = session.stats()
+    check(stats["size"] == 1, "threads: one workbook cached")
+    check(stats["profiles"] >= 1 and stats["searches"] >= 1, "threads: caches populated")
+
+    def streamed(index):
+        with fastxl.iter_rows(basic, limit=2, as_tuples=True) as rows:
+            return list(rows)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        streams = list(pool.map(streamed, range(12)))
+    check(all(item == streams[0] for item in streams), "threads: iterators consistent")
 
 
 def session_cache_checks(fastxl, work_dir):
@@ -441,9 +525,11 @@ def main():
     feature_fixtures(fastxl)
     budget_checks(fastxl)
     streaming_checks(fastxl)
+    thread_safety_checks(fastxl)
     with tempfile.TemporaryDirectory(prefix="fastxl-python-") as directory:
         session_checks(fastxl, Path(directory))
         session_cache_checks(fastxl, Path(directory))
+        iterator_release_check(fastxl, Path(directory))
         cli_parity(fastxl, cli, Path(directory))
         audit_fixes(fastxl, cli, Path(directory))
 

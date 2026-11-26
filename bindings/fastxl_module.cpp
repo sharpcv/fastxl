@@ -21,6 +21,8 @@
 #include <filesystem>
 #include <list>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -495,11 +497,13 @@ void append_key_field(std::string& key, uint64_t value) {
 }
 
 // A cache of read-only sheet profiles keyed by file identity plus the probe
-// options. fastxl.Session implements it; module-level helpers pass nullptr.
+// options. fastxl.Session implements it (with a mutex); module-level helpers
+// pass nullptr. `find_profile` copies under the cache lock so the returned data
+// cannot be evicted by another thread while the caller formats a result.
 class ProfileCache {
 public:
   virtual ~ProfileCache() = default;
-  virtual const SheetProfile* find_profile(const std::string& key) = 0;
+  virtual bool find_profile(const std::string& key, SheetProfile& out) = 0;
   virtual void store_profile(const std::string& key, const SheetProfile& profile) = 0;
 };
 
@@ -591,8 +595,7 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
     const std::string key =
         cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, index);
     if (cache != nullptr) {
-      if (const SheetProfile* hit = cache->find_profile(key)) {
-        build.profile = *hit;
+      if (cache->find_profile(key, build.profile)) {
         build.profile.file = args.file;
         build.defined_names.assign(workbook.defined_names().begin(),
                                    workbook.defined_names().end());
@@ -618,8 +621,7 @@ ProbeBuild build_profile(const ProbeArgs& args, const WorkBook* cached = nullptr
   const std::string key =
       cache == nullptr ? std::string{} : profile_key(stamp.key, format, args, 0);
   if (cache != nullptr) {
-    if (const SheetProfile* hit = cache->find_profile(key)) {
-      build.profile = *hit;
+    if (cache->find_profile(key, build.profile)) {
       build.profile.file = args.file;
       return build;
     }
@@ -695,10 +697,15 @@ py::dict info(const std::string& file, const std::string& format_name, size_t ma
   if (format != Format::Xlsx && format != Format::Auto)
     throw Exception(ErrorCode::UnsupportedFormat,
                     "info supports xlsx workbooks only; use schema/probe for csv/jsonl");
-  OpenOptions open_options;
-  open_options.shared_strings = SharedStringMode::Count;
-  WorkBook workbook = WorkBook::open(utf8_path(file), open_options);
-  Json root = info_json(workbook, file);
+  Json root;
+  {
+    // Opening the package and parsing the OPC parts is pure C++ work.
+    py::gil_scoped_release release;
+    OpenOptions open_options;
+    open_options.shared_strings = SharedStringMode::Count;
+    WorkBook workbook = WorkBook::open(utf8_path(file), open_options);
+    root = info_json(workbook, file);
+  }
   return json_result(root, max_bytes);
 }
 
@@ -752,7 +759,13 @@ py::dict probe(const std::string& file, py::object sheet, py::object header_row,
   ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer, std::move(delimiter),
                                    fill_gaps, max_rows, sample, top, distinct_cap, jobs,
                                    regions);
-  Json root = probe_json(args);
+  Json root;
+  {
+    // Profiling only touches C++ state; release the GIL so other Python threads
+    // (and other module calls) can run while this scan streams the sheet.
+    py::gil_scoped_release release;
+    root = probe_json(args);
+  }
   return json_result(root, max_bytes);
 }
 
@@ -792,10 +805,7 @@ Json schema_json(const ProbeArgs& args, const WorkBook* cached = nullptr,
     if (cache != nullptr) {
       for (size_t i = 0; i < indices.size(); ++i) {
         keys[i] = profile_key(stamp.key, resolved, args, indices[i]);
-        if (const SheetProfile* hit = cache->find_profile(keys[i])) {
-          profiles[i] = *hit;
-          continue;
-        }
+        if (cache->find_profile(keys[i], profiles[i])) continue;
         missing.push_back(i);
       }
     } else {
@@ -874,7 +884,11 @@ py::dict schema(const std::string& file, py::object sheet, py::object header_row
   ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer, std::move(delimiter),
                                    fill_gaps, max_rows, sample, top, distinct_cap, jobs,
                                    regions);
-  Json root = schema_json(args);
+  Json root;
+  {
+    py::gil_scoped_release release;
+    root = schema_json(args);
+  }
   return json_result(root, max_bytes);
 }
 
@@ -943,6 +957,9 @@ struct RowStream {
   fastxl_cli::HeaderChoice choice;
   std::unique_ptr<Reader> reader;
   std::vector<std::string> names;
+  // Cached at open time so the iterator keeps reporting its identity after
+  // close() has released the reader.
+  std::string sheet_name = "table";
   // One shared `str` per column name: every dict row references the same key
   // objects instead of allocating a new string per cell (large RSS win).
   std::vector<py::str> key_objects;
@@ -959,7 +976,18 @@ struct RowStream {
 
   bool advance(py::object& out) {
     while (!exhausted) {
-      if (!reader->next(row)) {
+      if (reader == nullptr) {
+        exhausted = true;
+        return false;
+      }
+      bool have_row = false;
+      {
+        // One row at a time is parsed by pure C++ code; release the GIL so
+        // other Python threads can run while this stream decompresses.
+        py::gil_scoped_release release;
+        have_row = reader->next(row);
+      }
+      if (!have_row) {
         exhausted = true;
         return false;
       }
@@ -1064,35 +1092,43 @@ std::unique_ptr<RowStream> open_row_stream(const std::string& file, py::object s
 
   stream->resolved = resolve_format(file, format);
   const std::filesystem::path path = utf8_path(file);
-  ReadOptions options = read_options(stream->args, stream->resolved);
-  options.max_rows = 0;
-  options.max_columns = static_cast<uint32_t>(max_columns);
-  options.lenient_columns = true;
+  {
+    // Everything up to (and including) opening the reader is pure C++; the GIL
+    // is only needed again to build the Python key strings below.
+    py::gil_scoped_release release;
+    ReadOptions options = read_options(stream->args, stream->resolved);
+    options.max_rows = 0;
+    options.max_columns = static_cast<uint32_t>(max_columns);
+    options.lenient_columns = true;
 
-  if (stream->args.header_auto) {
-    if (stream->resolved == Format::Xlsx) {
-      WorkBook workbook = WorkBook::open(path);
-      stream->choice = fastxl_cli::detect_header_xlsx(
-          workbook, resolve_sheet_index(workbook, stream->args.sheet));
-      options.header_row = stream->choice.row;
-    } else if (stream->resolved == Format::Csv) {
-      const char delim = resolved_delimiter(stream->args, path);
-      ReadOptions scan_options = options;
-      scan_options.header_row = 0;
-      scan_options.max_rows = 0;
-      scan_options.column_count = fastxl_cli::csv_column_count(path, delim, 20);
-      auto scan_reader = open_reader(path, scan_options);
-      stream->choice = fastxl_cli::detect_header_table(*scan_reader);
-      options.header_row = stream->choice.row;
-      options.column_count = scan_options.column_count;
-    } else {
-      options.header_row = 0;
+    if (stream->args.header_auto) {
+      if (stream->resolved == Format::Xlsx) {
+        WorkBook workbook = WorkBook::open(path);
+        stream->choice = fastxl_cli::detect_header_xlsx(
+            workbook, resolve_sheet_index(workbook, stream->args.sheet));
+        options.header_row = stream->choice.row;
+      } else if (stream->resolved == Format::Csv) {
+        const char delim = resolved_delimiter(stream->args, path);
+        ReadOptions scan_options = options;
+        scan_options.header_row = 0;
+        scan_options.max_rows = 0;
+        scan_options.column_count = fastxl_cli::csv_column_count(path, delim, 20);
+        auto scan_reader = open_reader(path, scan_options);
+        stream->choice = fastxl_cli::detect_header_table(*scan_reader);
+        options.header_row = stream->choice.row;
+        options.column_count = scan_options.column_count;
+      } else {
+        options.header_row = 0;
+      }
     }
+    if (stream->resolved == Format::Jsonl) options.header_row = 0;
+    stream->options = options;
+    stream->reader = open_reader(path, options);
+    const std::string_view sheet_name = stream->reader->sheet_name();
+    stream->sheet_name =
+        sheet_name.empty() ? std::string("table") : std::string(sheet_name);
+    stream->names = unique_names(stream->reader->columns());
   }
-  if (stream->resolved == Format::Jsonl) options.header_row = 0;
-  stream->options = options;
-  stream->reader = open_reader(path, options);
-  stream->names = unique_names(stream->reader->columns());
   if (stream->shape == RowShape::Dicts) {
     stream->key_objects.reserve(stream->names.size());
     for (const std::string& name : stream->names) stream->key_objects.emplace_back(name);
@@ -1106,12 +1142,9 @@ py::dict rows_payload(RowStream& stream, py::list rows, size_t max_bytes) {
   root["ok"] = true;
   root["file"] = stream.file;
   root["format"] = std::string(to_string(stream.resolved));
-  const std::string_view sheet_name = stream.reader->sheet_name();
-  const std::string resolved_sheet =
-      sheet_name.empty() ? std::string("table") : std::string(sheet_name);
-  root["sheet"] = resolved_sheet;
+  root["sheet"] = stream.sheet_name;
   py::dict sheet_info;
-  sheet_info["name"] = resolved_sheet;
+  sheet_info["name"] = stream.sheet_name;
   root["sheet_info"] = std::move(sheet_info);
   root["header_row"] = stream.options.header_row;
   root["header_auto"] = stream.args.header_auto;
@@ -1151,7 +1184,9 @@ py::dict read_rows(const std::string& file, py::object sheet, py::object header_
 
 // Lazy row iterator returned by iter_rows(). It keeps the reader open and
 // converts one row per __next__ call, so memory stays bounded for
-// multi-million-row sheets.
+// multi-million-row sheets. `close()` (also used by the context manager)
+// releases the reader deterministically, which matters on Windows where a
+// still-open file mapping blocks replacement/deletion of the source file.
 class RowIterator {
 public:
   explicit RowIterator(std::unique_ptr<RowStream> stream) : stream_(std::move(stream)) {}
@@ -1159,26 +1194,33 @@ public:
   RowIterator& iter() { return *this; }
 
   py::object next() {
+    if (closed()) throw py::stop_iteration();
     py::object converted;
     if (!stream_->advance(converted)) throw py::stop_iteration();
     return converted;
   }
 
+  void close() {
+    if (!stream_) return;
+    stream_->reader.reset();
+    stream_->exhausted = true;
+  }
+
+  bool closed() const { return !stream_ || stream_->reader == nullptr; }
+
   py::list columns() const {
     py::list out;
+    if (!stream_) return out;
     for (const auto& name : stream_->names) out.append(py::str(name));
     return out;
   }
 
-  uint32_t header_row() const { return stream_->options.header_row; }
+  uint32_t header_row() const { return stream_ ? stream_->options.header_row : 0u; }
 
-  std::string sheet() const {
-    const std::string_view name = stream_->reader->sheet_name();
-    return name.empty() ? std::string("table") : std::string(name);
-  }
+  std::string sheet() const { return stream_ ? stream_->sheet_name : std::string("table"); }
 
-  size_t rows_read() const { return stream_->emitted; }
-  bool truncated() const { return stream_->truncated; }
+  size_t rows_read() const { return stream_ ? stream_->emitted : 0; }
+  bool truncated() const { return stream_ ? stream_->truncated : false; }
 
 private:
   std::unique_ptr<RowStream> stream_;
@@ -1275,25 +1317,39 @@ py::dict search(const std::string& file, const std::string& query, bool regex,
                 size_t max_bytes) {
   SearchOptions options =
       make_search_options(query, regex, ignore_case, context, max_hits, max_cell_bytes, sheet);
-  Json root = search_json(file, options, format);
+  Json root;
+  {
+    py::gil_scoped_release release;
+    root = search_json(file, options, format);
+  }
   return json_result(root, max_bytes);
 }
 
-// The CLI `preview` payload (used range, header row, metadata) for one sheet.
-Json preview_sheet_json(const WorkBook& workbook, const std::string& file,
-                        const std::string& sheet, py::object header_row, size_t rows,
-                        const std::string& range, const std::string& columns,
-                        size_t max_cell_bytes) {
-  bool header_auto = false;
-  uint32_t header_row_number = 1;
+// One resolved `header_row` policy (`auto` or a fixed 1-based row), parsed from
+// Python before the GIL is released.
+struct HeaderSelection {
+  bool auto_row = false;
+  uint32_t row = 1;
+};
+
+HeaderSelection resolve_header_selection(py::object header_row) {
+  HeaderSelection selection;
   if (py::isinstance<py::str>(header_row)) {
     const std::string text = py::cast<std::string>(header_row);
     if (text != "auto")
       throw Exception(ErrorCode::InvalidValue, "header_row must be an integer, 0 or 'auto'");
-    header_auto = true;
+    selection.auto_row = true;
   } else {
-    header_row_number = py::cast<uint32_t>(header_row);
+    selection.row = py::cast<uint32_t>(header_row);
   }
+  return selection;
+}
+
+// The CLI `preview` payload (used range, header row, metadata) for one sheet.
+Json preview_sheet_json(const WorkBook& workbook, const std::string& file,
+                        const std::string& sheet, bool header_auto, uint32_t header_row_number,
+                        size_t rows, const std::string& range, const std::string& columns,
+                        size_t max_cell_bytes) {
   fastxl_cli::SheetRange sheet_range;
   std::vector<uint8_t> wanted;
   try {
@@ -1315,9 +1371,15 @@ py::dict preview_sheet(const std::string& file, py::object sheet, py::object hea
   if (resolved != Format::Xlsx)
     throw Exception(ErrorCode::UnsupportedFormat,
                     "preview_sheet supports xlsx workbooks; use preview() for csv/jsonl");
-  WorkBook workbook = WorkBook::open(utf8_path(file));
-  Json root = preview_sheet_json(workbook, file, sheet_selector(sheet), std::move(header_row),
-                                 rows, range, columns, max_cell_bytes);
+  const HeaderSelection header = resolve_header_selection(header_row);
+  const std::string sheet_name = sheet_selector(sheet);
+  Json root;
+  {
+    py::gil_scoped_release release;
+    WorkBook workbook = WorkBook::open(utf8_path(file));
+    root = preview_sheet_json(workbook, file, sheet_name, header.auto_row, header.row, rows,
+                              range, columns, max_cell_bytes);
+  }
   return json_result(root, max_bytes);
 }
 
@@ -1451,6 +1513,11 @@ std::string search_key(const std::string& file_key, const SearchOptions& options
 // worksheet XML. Entries are keyed by file (path, mtime, size) plus the request
 // options, so a rewritten workbook naturally misses, and the least recently used
 // entry is evicted past the per-cache capacity.
+//
+// The session is safe to share between Python threads: every cache is guarded by
+// `mutex_`, while the expensive C++ work (opening the package, profiling,
+// searching) runs with the GIL released and without holding the mutex, so
+// concurrent calls make progress in parallel instead of serialising on the GIL.
 class Session : public ProfileCache {
 public:
   // `memory_map` defaults to off on Windows: a resident workbook keeps the
@@ -1468,7 +1535,12 @@ public:
     if (resolved != Format::Xlsx && resolved != Format::Auto)
       throw Exception(ErrorCode::UnsupportedFormat,
                       "info supports xlsx workbooks only; use schema/probe for csv/jsonl");
-    Json root = info_json(cached_workbook(file), file);
+    std::shared_ptr<WorkBook> workbook = cached_workbook_shared(file);
+    Json root;
+    {
+      py::gil_scoped_release release;
+      root = info_json(*workbook, file);
+    }
     return json_result(root, max_bytes);
   }
 
@@ -1479,7 +1551,14 @@ public:
     ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
                                      std::move(delimiter), fill_gaps, max_rows, sample, top,
                                      distinct_cap, jobs, regions);
-    Json root = schema_json(args, cached_if_xlsx(file, format), this);
+    std::shared_ptr<WorkBook> workbook = cached_if_xlsx(file, format);
+    Json root;
+    {
+      // The cache methods take the session mutex and never need the GIL, so it
+      // is safe to profile while other Python threads run.
+      py::gil_scoped_release release;
+      root = schema_json(args, workbook.get(), this);
+    }
     return json_result(root, max_bytes);
   }
 
@@ -1490,7 +1569,12 @@ public:
     ProbeArgs args = make_probe_args(file, sheet, header_row, format, infer,
                                      std::move(delimiter), fill_gaps, max_rows, sample, top,
                                      distinct_cap, jobs, regions);
-    Json root = probe_json(args, cached_if_xlsx(file, format), this);
+    std::shared_ptr<WorkBook> workbook = cached_if_xlsx(file, format);
+    Json root;
+    {
+      py::gil_scoped_release release;
+      root = probe_json(args, workbook.get(), this);
+    }
     return json_result(root, max_bytes);
   }
 
@@ -1504,12 +1588,19 @@ public:
     // cached, so changing the output budget never rescans the sheet.
     const std::string key = search_key(stat_file(utf8_path(file)).key, options, format);
     Json root;
-    const Json* cached = find_search(key);
-    if (cached != nullptr) {
-      root = *cached;
-    } else {
-      root = search_json(file, options, format, cached_if_xlsx(file, format));
-      store_search(key, root);
+    bool hit = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      hit = find_search_locked(key, root);
+    }
+    if (!hit) {
+      std::shared_ptr<WorkBook> workbook = cached_if_xlsx(file, format);
+      {
+        py::gil_scoped_release release;
+        root = search_json(file, options, format, workbook.get());
+      }
+      std::lock_guard<std::mutex> lock(mutex_);
+      store_search_locked(key, root);
     }
     return json_result(root, max_bytes);
   }
@@ -1517,12 +1608,19 @@ public:
   py::dict preview_sheet(const std::string& file, py::object sheet, py::object header_row,
                          const std::string& format, size_t rows, const std::string& range,
                          const std::string& columns, size_t max_cell_bytes, size_t max_bytes) {
-    const WorkBook* cached = cached_if_xlsx(file, format);
-    if (cached == nullptr)
+    const Format resolved = resolve_format(file, format);
+    if (resolved != Format::Xlsx)
       throw Exception(ErrorCode::UnsupportedFormat,
                       "preview_sheet supports xlsx workbooks; use preview() for csv/jsonl");
-    Json root = preview_sheet_json(*cached, file, sheet_selector(sheet), std::move(header_row),
-                                   rows, range, columns, max_cell_bytes);
+    const HeaderSelection header = resolve_header_selection(header_row);
+    const std::string sheet_name = sheet_selector(sheet);
+    std::shared_ptr<WorkBook> workbook = cached_workbook_shared(file);
+    Json root;
+    {
+      py::gil_scoped_release release;
+      root = preview_sheet_json(*workbook, file, sheet_name, header.auto_row, header.row, rows,
+                                range, columns, max_cell_bytes);
+    }
     return json_result(root, max_bytes);
   }
 
@@ -1555,19 +1653,23 @@ public:
                        infer, std::move(delimiter), fill_gaps, max_columns, with_cells);
   }
 
-  // ProfileCache: read-only sheet profiles reused by schema/probe.
-  const SheetProfile* find_profile(const std::string& key) override {
+  // ProfileCache: read-only sheet profiles reused by schema/probe. Copies under
+  // the session lock so a concurrent eviction cannot invalidate the result.
+  bool find_profile(const std::string& key, SheetProfile& out) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto found = profiles_.find(key);
     if (found == profiles_.end()) {
       ++profile_misses_;
-      return nullptr;
+      return false;
     }
     ++profile_hits_;
     profile_order_.splice(profile_order_.begin(), profile_order_, found->second.order);
-    return &found->second.profile;
+    out = found->second.profile;
+    return true;
   }
 
   void store_profile(const std::string& key, const SheetProfile& profile) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto found = profiles_.find(key);
     if (found != profiles_.end()) {
       found->second.profile = profile;
@@ -1586,6 +1688,7 @@ public:
   }
 
   void clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
     order_.clear();
     profiles_.clear();
@@ -1595,6 +1698,7 @@ public:
   }
 
   py::dict stats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     py::dict out;
     out["size"] = entries_.size();
     out["capacity"] = capacity_;
@@ -1612,7 +1716,10 @@ public:
   }
 
   size_t capacity() const noexcept { return capacity_; }
-  size_t size() const noexcept { return entries_.size(); }
+  size_t size() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.size();
+  }
   size_t profile_capacity() const noexcept { return profile_capacity_; }
   size_t search_capacity() const noexcept { return search_capacity_; }
   bool memory_map() const noexcept { return memory_map_; }
@@ -1627,7 +1734,7 @@ public:
 
 private:
   struct Entry {
-    std::unique_ptr<WorkBook> book;
+    std::shared_ptr<WorkBook> book;
     uint64_t mtime_ns = 0;
     uint64_t size = 0;
     std::list<std::string>::iterator order;
@@ -1643,23 +1750,26 @@ private:
     std::list<std::string>::iterator order;
   };
 
-  const WorkBook* cached_if_xlsx(const std::string& file, const std::string& format) {
+  std::shared_ptr<WorkBook> cached_if_xlsx(const std::string& file,
+                                           const std::string& format) {
     if (resolve_format(file, format) != Format::Xlsx) return nullptr;
-    return &cached_workbook(file);
+    return cached_workbook_shared(file);
   }
 
-  const Json* find_search(const std::string& key) {
+  // Copies the cached search payload; callers hold `mutex_`.
+  bool find_search_locked(const std::string& key, Json& out) {
     auto found = searches_.find(key);
     if (found == searches_.end()) {
       ++search_misses_;
-      return nullptr;
+      return false;
     }
     ++search_hits_;
     search_order_.splice(search_order_.begin(), search_order_, found->second.order);
-    return &found->second.root;
+    out = found->second.root;
+    return true;
   }
 
-  void store_search(const std::string& key, const Json& root) {
+  void store_search_locked(const std::string& key, const Json& root) {
     while (searches_.size() >= search_capacity_ && !search_order_.empty()) {
       searches_.erase(search_order_.back());
       search_order_.pop_back();
@@ -1672,7 +1782,10 @@ private:
   }
 
   // Returns the cached workbook for `file`, opening and caching it when needed.
-  const WorkBook& cached_workbook(const std::string& file) {
+  // The shared_ptr keeps the workbook alive even if another thread evicts it
+  // while this call is still profiling; the expensive open runs without the GIL
+  // and without the session lock.
+  std::shared_ptr<WorkBook> cached_workbook_shared(const std::string& file) {
     const std::filesystem::path path = utf8_path(file);
     std::error_code ec;
     const uint64_t size = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
@@ -1683,23 +1796,34 @@ private:
           std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch())
               .count());
     }
-    const std::string key = path.lexically_normal().string();
+    const auto u8 = path.lexically_normal().u8string();
+    const std::string key(reinterpret_cast<const char*>(u8.data()), u8.size());
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto found = entries_.find(key);
+      if (found != entries_.end() && found->second.mtime_ns == stamp &&
+          found->second.size == size) {
+        ++hits_;
+        order_.splice(order_.begin(), order_, found->second.order);
+        return found->second.book;
+      }
+      ++misses_;
+    }
+    std::shared_ptr<WorkBook> book;
+    {
+      py::gil_scoped_release release;
+      OpenOptions options;
+      options.memory_map = memory_map_;
+      book = std::make_shared<WorkBook>(WorkBook::open(path, options));
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
     auto found = entries_.find(key);
     if (found != entries_.end() && found->second.mtime_ns == stamp &&
         found->second.size == size) {
-      ++hits_;
+      // Another thread opened the same file first; prefer its entry.
       order_.splice(order_.begin(), order_, found->second.order);
-      return *found->second.book;
+      return found->second.book;
     }
-    ++misses_;
-    if (found != entries_.end()) {
-      order_.erase(found->second.order);
-      entries_.erase(found);
-    }
-    // Open first so a failure leaves the cache untouched.
-    OpenOptions options;
-    options.memory_map = memory_map_;
-    std::unique_ptr<WorkBook> book = std::make_unique<WorkBook>(WorkBook::open(path, options));
     while (entries_.size() >= capacity_ && !order_.empty()) {
       entries_.erase(order_.back());
       order_.pop_back();
@@ -1711,9 +1835,10 @@ private:
     entry.size = size;
     entry.order = order_.begin();
     auto inserted = entries_.emplace(key, std::move(entry));
-    return *inserted.first->second.book;
+    return inserted.first->second.book;
   }
 
+  mutable std::mutex mutex_;
   std::list<std::string> order_;
   std::unordered_map<std::string, Entry> entries_;
   std::list<std::string> profile_order_;
@@ -1793,7 +1918,9 @@ PYBIND11_MODULE(_fastxl, m) {
         py::arg("fill_gaps") = false, py::arg("max_columns") = 16384,
         py::arg("with_cells") = false,
         "Lazy row iterator: converts one row per next() so multi-million-row sheets "
-        "stay bounded in memory. limit=0 streams every row.");
+        "stay bounded in memory. limit=0 streams every row. Use "
+        "`with fastxl.iter_rows(...) as rows:` or rows.close() to release the file "
+        "handle deterministically.");
   m.def("search", &search, py::arg("file"), py::arg("query"), py::arg("regex") = false,
         py::arg("ignore_case") = true, py::arg("context") = 1,
         py::arg("max_hits") = 100, py::arg("max_cell_bytes") = 256,
@@ -1815,9 +1942,19 @@ PYBIND11_MODULE(_fastxl, m) {
         "A1 refs and cell types.");
   py::class_<RowIterator>(m, "RowIterator",
                           "Lazy typed-row iterator returned by iter_rows(); one row is "
-                          "decoded per next() call.")
+                          "decoded per next() call. Use it as a context manager or call "
+                          "close() to release the underlying file handle deterministically.")
       .def("__iter__", &RowIterator::iter)
       .def("__next__", &RowIterator::next)
+      .def("close", &RowIterator::close,
+           "Release the reader and close the underlying file handle now (idempotent). "
+           "Further iteration stops.")
+      .def_property_readonly("closed", &RowIterator::closed)
+      .def("__enter__", [](py::object self) { return self; })
+      .def("__exit__",
+           [](RowIterator& self, const py::object&, const py::object&, const py::object&) {
+             self.close();
+           })
       .def_property_readonly("columns", &RowIterator::columns)
       .def_property_readonly("header_row", &RowIterator::header_row)
       .def_property_readonly("sheet", &RowIterator::sheet)
@@ -1831,7 +1968,9 @@ PYBIND11_MODULE(_fastxl, m) {
   py::class_<Session>(m, "Session",
                       "Caches opened workbooks, sheet profiles and repeated search "
                       "payloads for repeated probes; entries expire when the file's "
-                      "mtime or size changes.")
+                      "mtime or size changes. Safe to share between Python threads: "
+                      "expensive C++ work runs with the GIL released and the caches "
+                      "are mutex-protected.")
       .def(py::init<size_t, py::object, size_t, size_t>(), py::arg("capacity") = 8,
            py::arg("memory_map") = py::none(), py::arg("profile_capacity") = 64,
            py::arg("search_capacity") = 16,

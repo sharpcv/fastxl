@@ -233,6 +233,16 @@ bytes, long paths and streamed xlsx.
 - On Windows a resident `Session` opens workbooks without `mmap` by default so
   Excel can still save-replace the file; `Session(memory_map=True)` opts back in
   at the cost of possibly blocking that save while the cache holds it.
+- `iter_rows()` returns a lazy iterator that owns the reader. A loop that breaks
+  early keeps the file handle open until the iterator is garbage collected; use
+  `with fastxl.iter_rows(...) as rows:` or `rows.close()` (idempotent) to release
+  it deterministically, which is required before replacing/deleting the workbook
+  on Windows. Exhausting the iterator also closes it.
+- The bindings release the GIL while parsing/profiling (`info`, `schema`,
+  `probe`, `search`, `preview_sheet`, and per-row decoding), and `Session` guards
+  its caches with a mutex, so one `Session` may be shared by several Python
+  threads (thread pool / web worker threads) with identical results. A single
+  `RowIterator` must be consumed by one thread at a time.
 - Native and CLI payloads are the same contract for `info`/`schema`/`probe`/
   `search`; `preview` deliberately has two shapes (row reader vs sheet preview).
 - The MCP server keeps one Session per process, so a long-running server will

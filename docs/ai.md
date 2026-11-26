@@ -274,7 +274,18 @@ and `truncated` (set when `limit` stops the iteration early), takes the
 row-reader options (`limit`, `offset`, `as_dicts`, `as_tuples`, `infer`,
 `delimiter`, `fill_gaps`, `max_columns`, `with_cells`) and has no `max_bytes`
 budget. `Session.iter_rows` has the same signature and streams from the file
-rather than the cached workbook.
+rather than the cached workbook. Close it deterministically with
+`with fastxl.iter_rows(...) as rows:` or `rows.close()` (idempotent; a closed
+iterator simply stops), so an early `break` does not keep the file handle open
+until GC — on Windows that would block replacing or deleting the workbook:
+
+```python
+with fastxl.iter_rows("book.xlsx", sheet="Data") as rows:
+    for row in rows:
+        ...
+        break
+# rows.closed is True; rows.columns / rows.sheet remain readable
+```
 
 Every read function accepts `max_bytes=0` and returns the same `budget` object as
 the CLI. For repeated calls against the same file, keep a `Session`: it caches the
@@ -304,6 +315,12 @@ so asking for the same result with a different output budget is cheap.
 `Session` covers `info`/`schema`/`probe`/`search` and `preview_sheet`
 (workbook-level parsing); `preview`/`read_rows`/`iter_rows` delegate to the
 streaming readers, which own their decompression stream.
+
+The bindings release the GIL around the expensive C++ phases (`info`, `schema`,
+`probe`, `search`, `preview_sheet`, and per-row decoding in row streams) and
+`Session` guards its caches with a mutex, so one `Session` can be shared by
+several Python threads (thread pool or web worker threads) and concurrent calls
+return identical results.
 
 `preview_sheet()` returns the sheet-preview contract (used range, resolved header
 row, merged cells, comments, tables, pivots, charts) that the CLI `preview`

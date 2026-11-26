@@ -290,10 +290,17 @@ class RowIterator:
     """Lazy typed-row iterator returned by ``iter_rows()``.
 
     Decodes one row per ``next()`` call, so memory stays bounded for very large
-    sheets. The underlying reader stays open until the iterator is exhausted or
-    garbage collected; ``close()`` is not required.
+    sheets. The reader (and its file handle) is released when the iterator is
+    exhausted, garbage collected, or explicitly closed. Use it as a context
+    manager (``with fastxl.iter_rows(...) as rows:``) or call :meth:`close` for
+    deterministic release, which matters on Windows when breaking out of the
+    loop early. Iterating a closed iterator stops.
     """
 
+    def close(self) -> None:
+        """Release the reader and close the file handle now (idempotent)."""
+    @property
+    def closed(self) -> bool: ...
     @property
     def columns(self) -> list[str]: ...
     @property
@@ -306,6 +313,8 @@ class RowIterator:
     def truncated(self) -> bool: ...
     def __iter__(self) -> "RowIterator": ...
     def __next__(self) -> dict[str, CellValue] | list[CellValue] | tuple[CellValue, ...] | PreviewRow: ...
+    def __enter__(self) -> "RowIterator": ...
+    def __exit__(self, *args: object) -> None: ...
 
 class PreviewResult(TypedDict):
     version: int
