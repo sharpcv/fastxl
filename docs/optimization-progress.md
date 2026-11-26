@@ -1,6 +1,6 @@
 # fastxl 优化记录与进度
 
-> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.0`（`v1.3.0` 开发中）
+> 日期：2026-11-26 ｜ 基线：`v1.0.0`（`main`）｜当前：`v1.2.1`
 > 范围：`fastxl-core`、`fastxl-cli`、Python 绑定、MCP 工具链、文档与测试
 > 本机验证平台：Windows 10 x64（i7-14700 / MSVC 19.51）、Linux x86_64；CI 覆盖 Linux x64/arm64 与 Windows x64
 
@@ -34,7 +34,8 @@
 | M8.1 | M7 审计修复：MCP 契约、Windows 文件锁、预览原生化、共享公式与主题色 | ✅ 完成并验证 |
 | R1.1 | v1.1.0 发版收口：仓库清理、版本号、契约校验、Sanitizer/no-exceptions 门禁、基准 | ✅ 完成 |
 | M9 | v1.2.0 优化：Python 位置/惰性行流式、`Session` 画像与检索缓存、多 Sheet/大 part 纯 C++ 基准 | ✅ 完成并验证（Windows x64 本机实测；已发布 v1.2.0） |
-| M9.1 | v1.3.0：迭代器 `close()`/`with`、Python 绑定释放 GIL、`Session` 线程安全 | ✅ 完成并验证（Windows x64 本机实测） |
+| M9.1 | v1.2.1：迭代器 `close()`/`with`、Python 绑定释放 GIL、`Session` 线程安全 | ✅ 完成并验证（Windows x64 本机实测；已发布 v1.2.1） |
+| R1.2 | v1.2.1 发版收口：缓存失效/并发 LRU/迭代器释放审计修复、版本号、回归测试 | ✅ 完成（CI 全绿） |
 
 ---
 
@@ -390,7 +391,7 @@ python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
   Windows x64 预编译包，生成 `SHA256SUMS.txt` 并上传到对应 Release；v1.2.0 的产物
   由该工作流生成并校验。
 
-### M9.1 — v1.3.0：迭代器确定性释放与 Python 线程安全
+### M9.1 — v1.2.1：迭代器确定性释放、Python 线程安全与审计修复
 
 - `fastxl.RowIterator` 新增 `close()`、`closed` 属性与上下文管理器
   （`with fastxl.iter_rows(...) as rows:`）。`close()` 幂等，关闭后继续迭代抛
@@ -405,6 +406,31 @@ python projects/bench/perf_suite.py --runs 7 --jobs 4 --rows 200000 --cols 8 \
 - 验证：`test_python.py` 新增 `close()`/`with`/`closed`、确定性句柄释放
   （关闭后 `os.replace` 源文件成功）、并发 `Session` 与并发迭代器用例；
   C++（123 tests）/CLI/Python/MCP 套件全部通过。
+
+**审计修复（`fee8397` 审计报告）**
+
+- `Session` 缓存的文件被外部改写后返回旧内容并破坏 LRU：重新打开新
+  `WorkBook` 后未删除已存在的旧条目，`unordered_map::emplace` 在 key 已存在时
+  静默失败，新对象被丢弃、`order_` 残留重复节点。现在重插前先
+  `order_.erase` + `entries_.erase` 旧条目。
+- 并发 miss 同一 `search` key 时，第二个写入者直接 `push_front` + `emplace`，
+  同样产生重复 LRU 节点；`store_search_locked()` 改为已存在 key 原地更新并
+  `splice` 到表头。
+- `RowIterator` 自然耗尽（或达到 `limit`）时未释放 reader，`closed` 与文档说明
+  不一致；`RowStream::advance()` 现在两条耗尽路径都立即释放 reader，并在释放前
+  缓存 `extra_cells`，`read_rows()`/`preview()` 的 JSON 输出保持不变。
+- 回归测试（`projects/tests/test_python.py`）：文件改写热失效的新内容 + LRU
+  完整性校验、4 线程并发同 key `search`、自然耗尽后 `closed` 为真且源文件可
+  立即替换。回退到 `fee8397` 时新增用例 5 项全部失败，修复后全部通过。
+
+**发版**
+
+- 版本号升至 `1.2.1`（`xmake.lua`、CLI、Python 包、skill 镜像、MCP server），
+  `CHANGELOG.md` 的 `Unreleased (v1.3.0)` 转为正式 `v1.2.1` 段；`v1.2.1`
+  annotated tag 指向本次发布 commit，GitHub Release 标记为 Latest（v1.2.0 保留为
+  历史版本）。
+- `release` 工作流按 `v1.2.1` tag 构建 Linux x64 / Linux arm64 / Windows x64
+  预编译包，生成 `SHA256SUMS.txt` 并上传到对应 Release。
 
 ---
 

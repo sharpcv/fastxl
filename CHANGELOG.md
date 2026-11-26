@@ -4,7 +4,7 @@ All notable changes to fastxl are documented here. The project follows a
 `fastxl-vMAJOR.MINOR.PATCH` version scheme; the JSON contract keeps `"version": 1`
 and only adds optional fields within a major version.
 
-## Unreleased (v1.3.0)
+## v1.2.1
 
 ### Added
 
@@ -15,6 +15,25 @@ and only adds optional fields within a major version.
   open blocks replacing/deleting the source workbook. Iterating a closed
   iterator stops, `close()` is idempotent, and `columns`/`header_row`/`sheet`
   stay readable after close.
+
+### Fixed
+
+- `Session` served a stale workbook after a cached file was rewritten: the
+  refresh path left the old entry in the map, so `emplace` silently kept it,
+  the freshly opened workbook was dropped, and the workbook LRU list grew a
+  duplicate node. The stale entry is now removed before re-inserting, so a
+  rewritten file returns the new content and eviction stays consistent.
+- `Session.search()` could store a duplicate LRU node when several threads
+  missed the same query at once: the second writer now updates the existing
+  entry in place and splices its node to the front, so a later eviction cannot
+  drop a recently used payload.
+- `RowIterator` no longer waits for `close()` or garbage collection to release
+  its reader: natural exhaustion and reaching `limit` release it immediately,
+  matching the documented `closed` semantics (on Windows the source file can be
+  replaced at once). `read_rows()`/`preview()` keep reporting `extra_cells`
+  because the counter is captured before the reader is released.
+- Regression tests cover the rewritten-file refresh (fresh content plus LRU
+  integrity), concurrent same-key `search`, and exhaustion-time handle release.
 
 ### Changed
 
@@ -30,6 +49,9 @@ and only adds optional fields within a major version.
   expensive open/profile/search phases run without holding the mutex. A single
   `Session` can be shared by a thread pool (or a web framework's worker
   threads); concurrent calls return identical results.
+- Version is `1.2.1` across `xmake.lua`, the CLI, the Python package, the skill
+  mirror and the MCP server; the v1.2.0 release remains available as
+  tag/release `v1.2.0`.
 
 ### Changed — repository
 
