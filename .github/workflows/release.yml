@@ -172,6 +172,13 @@ jobs:
       - name: Checksums
         run: |
           cd dist
+          # upload-artifact keeps the least common parent of each job's paths,
+          # so wheels arrive under wheelhouse/. Flatten them so the release
+          # assets and the checksum glob are flat.
+          if [ -d wheelhouse ]; then
+            mv -f wheelhouse/*.whl .
+            rm -rf wheelhouse
+          fi
           sha256sum fastxl-*.zip fastxl_ctypes-*.whl > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
